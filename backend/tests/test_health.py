@@ -11,7 +11,7 @@ def test_health_returns_ok():
     data = resp.json()
     assert data["status"] == "ok"
     assert data["service"] == "LiveReview"
-    assert data["version"] == "0.1.1"
+    assert data["version"] == "0.1.2"
     assert data["environment"] == "development"
     assert data["database"] in ("ok", "degraded")
 

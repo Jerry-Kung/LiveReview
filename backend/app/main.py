@@ -4,6 +4,6 @@ from fastapi import FastAPI
 
 from app.routers import health
 
-app = FastAPI(title="LiveReview", version="0.1.1")
+app = FastAPI(title="LiveReview", version="0.1.2")
 
 app.include_router(health.router)
