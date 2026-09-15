@@ -122,36 +122,7 @@ V0 的初始复盘维度包括：
 
 前端框架、数据库产品等未锁定项由开发工具根据项目实际条件选择并记录。该选择不应扩展本阶段业务范围。
 
-## 本地开发
-
-环境要求：Python ≥3.12 + uv、Node ≥20 + npm。Docker Compose 用于测试环境（本地不强制安装 Docker）。
-
-### 后端
-
-```bash
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload   # http://localhost:8000/health
-uv run pytest                           # 测试
-```
-
-### 前端
-
-```bash
-cd frontend
-npm install
-npm run dev      # http://localhost:5173（已代理 /health 到后端 8000）
-npm run test     # 测试
-npm run build    # 构建产物到 dist/
-```
-
-### 测试环境（Docker Compose）
-
-```bash
-docker compose -f docker/docker-compose.yml up --build
-```
-
-拉起后前端在 `http://localhost:8080`，后端健康检查在 `http://localhost:8000/health`。
+本地运行、配置与部署说明见 `docs/runbooks/deployment.md`。
 
 ## 6. V0 版本规划
 
