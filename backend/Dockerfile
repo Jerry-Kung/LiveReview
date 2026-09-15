@@ -10,13 +10,11 @@ RUN sed -i \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml uv.lock ./
-COPY app ./app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-RUN pip install --no-cache-dir uv -i https://pypi.tuna.tsinghua.edu.cn/simple
-ENV UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
-RUN uv sync --frozen --no-dev
+COPY app ./app
 
 EXPOSE 12439
 
-CMD ["uv", "run", "python", "-m", "app"]
+CMD ["python", "-m", "app"]
