@@ -14,6 +14,7 @@ COPY pyproject.toml uv.lock ./
 COPY app ./app
 
 RUN pip install --no-cache-dir uv -i https://pypi.tuna.tsinghua.edu.cn/simple
+ENV UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN uv sync --frozen --no-dev
 
 EXPOSE 12439
