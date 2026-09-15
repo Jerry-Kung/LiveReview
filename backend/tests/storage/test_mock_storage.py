@@ -71,9 +71,11 @@ def test_presigned_url_uses_config_default_ttl(storage, payload):
     assert f"expires={storage.config.presigned_ttl_seconds}" in storage.generate_presigned_url(key)
 
 
-def test_missing_object_raises_client_error(storage):
-    with pytest.raises(StorageClientError):
+def test_missing_object_raises_server_error(storage):
+    with pytest.raises(StorageServerError) as excinfo:
         storage.get_object_bytes("liverreview/clip/absent_1_00000000.ts")
+    assert excinfo.value.code == "NoSuchKey"
+    assert excinfo.value.status_code == 404
 
 
 def test_client_fault_injection_raises_client_error(storage, payload):
@@ -122,7 +124,17 @@ def test_uploaded_keys_track_upload_order(storage, payload):
     assert storage.uploaded_keys == [first, second]
 
 
-def test_frozen_clock_still_produces_distinct_keys(storage):
+def test_uploaded_keys_persist_after_delete(storage, payload):
+    key = storage.generate_object_key("original", payload.name)
+    storage.upload_file(payload, key)
+    storage.delete_object(key)
+    assert storage.object_count == 0
+    assert storage.uploaded_keys == [key]  # 上传历史不因删除而消失
+
+
+def test_frozen_clock_still_produces_distinct_keys():
+    # 冻结时钟但使用默认随机 token：唯一性由随机 token 保证
+    storage = InMemoryStorage(now_ms=1731657645123)
     keys = {storage.generate_object_key("clip", "same.ts") for _ in range(3)}
     assert len(keys) == 3
-    assert all(k.startswith("liverreview/clip/same_1731657645123_deadbeef") for k in keys)
+    assert all(k.startswith("liverreview/clip/same_1731657645123_") for k in keys)

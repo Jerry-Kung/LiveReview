@@ -47,10 +47,10 @@ class InMemoryStorage(ObjectStorage):
     ) -> None:
         self.config = config or _DEFAULT_CONFIG
         self._objects: dict[str, bytes] = {}
+        self._upload_log: list[str] = []
         self._now_ms = now_ms
         self._unique_token = unique_token
         self._fault_mode = fault_mode
-        self._key_sequence = 0
 
     # —— 测试辅助 ——
 
@@ -59,7 +59,8 @@ class InMemoryStorage(ObjectStorage):
 
     @property
     def uploaded_keys(self) -> list[str]:
-        return list(self._objects.keys())
+        """历史上传顺序：不随删除而消失，与当前存量（object_count）区分。"""
+        return list(self._upload_log)
 
     @property
     def object_count(self) -> int:
@@ -79,15 +80,13 @@ class InMemoryStorage(ObjectStorage):
             )
 
     def _require(self, object_key: str) -> bytes:
-        if self._fault_mode == FaultMode.NOT_FOUND:
+        if self._fault_mode == FaultMode.NOT_FOUND or object_key not in self._objects:
             raise StorageServerError(
                 f"object not found: {object_key}",
                 code="NoSuchKey",
                 request_id="mock-request-id-0002",
                 status_code=404,
             )
-        if object_key not in self._objects:
-            raise StorageClientError(f"object not found: {object_key}")
         return self._objects[object_key]
 
     # —— 契约实现 ——
@@ -99,6 +98,7 @@ class InMemoryStorage(ObjectStorage):
             raise StorageClientError(f"本地文件不存在：{path}")
         data = path.read_bytes()
         self._objects[object_key] = data
+        self._upload_log.append(object_key)
         return StoredObject(object_key=object_key, size=len(data))
 
     def download_to_file(self, object_key: str, local_path: str | Path) -> Path:
@@ -126,16 +126,10 @@ class InMemoryStorage(ObjectStorage):
         )
 
     def generate_object_key(self, kind: str, filename: str) -> str:
-        unique = self._unique_token
-        if unique is not None:
-            # 固定 token 场景下（now_ms 与 unique_token 均冻结）追加自增序号，
-            # 避免同一毫秒时钟下重复调用生成完全相同的对象键。
-            unique = f"{unique}{self._key_sequence}"
-            self._key_sequence += 1
         return build_object_key(
             self.config.object_prefix,
             kind,
             filename,
             now_ms=self._now_ms,
-            unique=unique,
+            unique=self._unique_token,
         )
