@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from app.config import get_settings
 from app.database import check_database_ok
-from app.storage import StorageClientError, build_storage
+from app.storage import build_storage
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def _storage_state(settings) -> tuple[str, list[str]]:
         return "not_configured", settings.storage_missing_fields
     try:
         build_storage(settings)
-    except (StorageClientError, Exception) as exc:  # noqa: BLE001 —— 探针不应因存储异常中断
+    except Exception as exc:  # noqa: BLE001 —— 探针不应因存储异常中断
         logger.error("对象存储初始化失败：%s", exc)
         return "unavailable", []
     return "configured", []

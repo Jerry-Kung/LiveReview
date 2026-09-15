@@ -19,7 +19,11 @@ def test_health_returns_ok():
 
 
 def test_health_reports_storage_not_configured_without_credentials(monkeypatch):
-    """缺凭据时返回 not_configured 且不降级：用受控 Settings，不依赖本机 .env 是否存在。"""
+    """缺凭据时返回 not_configured 且不降级：用受控 Settings，不依赖本机 .env 是否存在。
+
+    严格钉住核心契约：数据库正常 + 存储 not_configured ⇒ 整体 status 必须为 "ok"，
+    因此显式桩定数据库探针为 True，断言 status 严格相等，而非只做取值范围检查。
+    """
     from app.config import Settings
     from app.routers import health as health_module
 
@@ -27,18 +31,23 @@ def test_health_reports_storage_not_configured_without_credentials(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     settings = Settings(_env_file=None)
     monkeypatch.setattr(health_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(health_module, "check_database_ok", lambda: True)
 
     resp = client.get("/health")
     data = resp.json()
     assert data["storage"] == "not_configured"
     assert "TOS_ACCESS_KEY" in data["storage_missing"]
-    # 未配置存储不使整体状态降级：V0.1.2 尚不依赖存储
-    assert data["status"] in ("ok", "degraded")  # 取决于数据库探针
-    assert data["storage"] != "unavailable"
+    # 未配置存储不使整体状态降级：数据库正常时必须严格为 ok
+    assert data["status"] == "ok"
 
 
 def test_health_reports_storage_configured(monkeypatch):
-    """已配置存储时返回 configured：用桩 Settings 避免真实读取 .env。"""
+    """已配置存储时返回 configured：用桩 Settings 避免真实读取 .env。
+
+    这里桩掉 build_storage 只为隔离健康检查自身的"construct 成功→configured"这一条分支；
+    真实「有效凭据 + 真实工厂」的组合由 tests/storage/test_factory.py::test_auto_with_credentials_uses_tos 覆盖，
+    此处不重复做集成断言。
+    """
     from app.routers import health as health_module
 
     class FakeSettings:
