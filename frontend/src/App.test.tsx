@@ -31,12 +31,83 @@ describe("App", () => {
         Promise.resolve({
           status: "ok",
           service: "LiveReview",
-          version: "0.1.1",
+          version: "0.1.2",
           environment: "development",
           database: "ok",
         }),
     });
     render(<App />);
     expect(await screen.findByText(/已连接/)).toBeInTheDocument();
+  });
+
+  it("存储已配置时显示已配置", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          status: "ok",
+          service: "LiveReview",
+          version: "0.1.2",
+          environment: "development",
+          database: "ok",
+          storage: "configured",
+          storage_missing: [],
+        }),
+    });
+    render(<App />);
+    expect(await screen.findByText(/对象存储：已配置/)).toBeInTheDocument();
+  });
+
+  it("缺少凭据时提示未配置并列出缺失项", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          status: "ok",
+          service: "LiveReview",
+          version: "0.1.2",
+          environment: "development",
+          database: "ok",
+          storage: "not_configured",
+          storage_missing: ["TOS_ACCESS_KEY", "TOS_SECRET_KEY"],
+        }),
+    });
+    render(<App />);
+    expect(await screen.findByText(/对象存储：未配置/)).toBeInTheDocument();
+    expect(screen.getByText(/TOS_ACCESS_KEY/)).toBeInTheDocument();
+  });
+
+  it("存储不可用时不使页面报错", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          status: "degraded",
+          service: "LiveReview",
+          version: "0.1.2",
+          environment: "development",
+          database: "ok",
+          storage: "unavailable",
+          storage_missing: [],
+        }),
+    });
+    render(<App />);
+    expect(await screen.findByText(/对象存储：不可用/)).toBeInTheDocument();
+  });
+
+  it("后端不返回 storage 字段时页面仍可渲染", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          status: "ok",
+          service: "LiveReview",
+          version: "0.1.2",
+          environment: "development",
+          database: "ok",
+        }),
+    });
+    render(<App />);
+    expect(await screen.findByText(/对象存储：未知/)).toBeInTheDocument();
   });
 });
