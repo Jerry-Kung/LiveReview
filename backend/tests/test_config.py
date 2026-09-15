@@ -9,14 +9,17 @@ def test_defaults_apply_without_env():
     assert settings.app_env == "development"
     assert settings.app_name == "LiveReview"
     assert settings.log_level == "INFO"
+    assert settings.app_port == 12439
 
 
 def test_env_var_overrides_default(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:////tmp/test.db")
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_PORT", "19999")
     settings = Settings(_env_file=None)
     assert settings.database_url == "sqlite:////tmp/test.db"
     assert settings.app_env == "test"
+    assert settings.app_port == 19999
 
 
 def test_tos_credentials_have_no_default():

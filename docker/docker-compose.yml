@@ -4,14 +4,17 @@ services:
       context: ../backend
     environment:
       APP_ENV: test
+      APP_HOST: 0.0.0.0
+      APP_PORT: "12439"
+      APP_RELOAD: "false"
       DATABASE_URL: sqlite:////app/data/liverreview.db
     volumes:
       - liverreview-media:/app/media
       - liverreview-data:/app/data
     ports:
-      - "8000:8000"
+      - "12439:12439"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:12439/health').status==200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
 
+    # 服务监听地址与端口（端口可在 .env 中通过 APP_PORT 自行配置）
+    app_host: str = "127.0.0.1"
+    app_port: int = 12439
+    app_reload: bool = False
+
     # TOS 对象存储凭据（V0.1.2 起使用，此处仅预留，无默认值）
     tos_access_key: str | None = None
     tos_secret_key: str | None = None
