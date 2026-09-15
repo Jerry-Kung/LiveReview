@@ -36,6 +36,11 @@ class TosStorage(ObjectStorage):
         self.config = config
         self._client: Any | None = None
         self._lock = threading.Lock()
+        # SDK 异常类型缓存：仅在 _create_client 成功导入 SDK 后写入一次，
+        # 此后 _run 只读缓存，不再调用 _import_tos()——SDK 缺失时二次导入会
+        # 抛出裸 ImportError，把正在处理的原始异常替换掉。
+        self._client_error_type: type[Exception] | None = None
+        self._server_error_type: type[Exception] | None = None
 
     def _safe_message(self, exc: BaseException) -> str:
         """提取异常文本并脱敏：SDK 报错可能原样回显请求参数，须剔除 AK/SK。"""
@@ -60,7 +65,12 @@ class TosStorage(ObjectStorage):
         except ImportError as exc:
             raise StorageClientError(
                 "未安装 TOS SDK，请先安装依赖（tos>=2.6.0）后再启用 TOS 存储"
-            ) from exc
+            ) from None
+
+        # SDK 导入成功后一次性缓存异常类型；之后 _create_client/_run 只读缓存，
+        # 不再调用 _import_tos()，避免在 except 块里二次导入触发裸 ImportError。
+        self._client_error_type = tos.exceptions.TosClientError
+        self._server_error_type = tos.exceptions.TosServerError
 
         try:
             return tos.TosClientV2(
@@ -70,17 +80,11 @@ class TosStorage(ObjectStorage):
                 self.config.region,
             )
         except Exception as exc:  # SDK 初始化异常面较宽，统一收敛为领域异常
-            if isinstance(exc, self._sdk_client_error()):
-                raise StorageClientError(f"TOS 客户端初始化失败：{self._safe_message(exc)}") from exc
-            if isinstance(exc, self._sdk_server_error()):
-                raise self._as_server_error(exc) from exc
-            raise StorageClientError(f"TOS 客户端初始化失败：{self._safe_message(exc)}") from exc
-
-    def _sdk_client_error(self) -> tuple[type, ...]:
-        return (getattr(_import_tos().exceptions, "TosClientError"),)
-
-    def _sdk_server_error(self) -> tuple[type, ...]:
-        return (getattr(_import_tos().exceptions, "TosServerError"),)
+            if isinstance(exc, self._client_error_type):
+                raise StorageClientError(f"TOS 客户端初始化失败：{self._safe_message(exc)}") from None
+            if isinstance(exc, self._server_error_type):
+                raise self._as_server_error(exc) from None
+            raise StorageClientError(f"TOS 客户端初始化失败：{self._safe_message(exc)}") from None
 
     def _as_server_error(self, exc: BaseException) -> StorageServerError:
         code = getattr(exc, "code", None)
@@ -106,15 +110,23 @@ class TosStorage(ObjectStorage):
         return StorageClientError(message)
 
     def _run(self, action: str, call: Any) -> Any:
-        """统一执行 SDK 调用并映射异常，避免各方法重复 try/except 分支。"""
+        """统一执行 SDK 调用并映射异常，避免各方法重复 try/except 分支。
+
+        只读 `_client_error_type` / `_server_error_type` 缓存，绝不在此处调用
+        `_import_tos()`：若在 except 块里重新导入，SDK 缺失时会抛出裸
+        ImportError，把正在处理的原始异常替换掉，破坏「SDK 缺失转
+        StorageClientError」的契约。缓存为 None 说明客户端尚未成功创建
+        （理论上不会发生，因为 call() 内部会先访问 self.client 触发创建），
+        此时直接归入兜底分支。
+        """
         try:
             return call()
         except Exception as exc:  # noqa: BLE001 —— 需按 SDK 异常类型分流后重新抛出
-            if isinstance(exc, self._sdk_client_error()):
-                raise self._as_client_error(exc) from exc
-            if isinstance(exc, self._sdk_server_error()):
-                raise self._as_server_error(exc) from exc
-            raise StorageClientError(f"{action} 失败：{self._safe_message(exc)}") from exc
+            if self._client_error_type is not None and isinstance(exc, self._client_error_type):
+                raise self._as_client_error(exc) from None
+            if self._server_error_type is not None and isinstance(exc, self._server_error_type):
+                raise self._as_server_error(exc) from None
+            raise StorageClientError(f"{action} 失败：{self._safe_message(exc)}") from None
 
     # —— 契约实现 ——
 

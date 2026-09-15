@@ -5,6 +5,7 @@
 
 import logging
 import sys
+import traceback
 import types
 from pathlib import Path
 
@@ -206,3 +207,30 @@ def test_sdk_missing_raises_client_error(monkeypatch):
     with pytest.raises(StorageClientError) as excinfo:
         storage.client
     assert "tos" in str(excinfo.value)
+
+
+def test_sdk_missing_during_call_raises_client_error_not_bare_import_error(monkeypatch):
+    """_run 的 except 块不得再调用 _import_tos()：否则 SDK 缺失时会把正在
+    处理的原始异常替换为裸 ImportError，而不是约定的 StorageClientError。"""
+
+    def boom():
+        raise ImportError("No module named 'tos'")
+
+    monkeypatch.setattr(tos_backend, "_import_tos", boom)
+    storage = TosStorage(CONFIG)
+    with pytest.raises(StorageClientError) as excinfo:
+        storage.get_object_bytes("liverreview/clip/a.ts")
+    assert "tos" in str(excinfo.value)
+
+
+def test_mapped_exception_cuts_cause_chain_without_leaking_credentials(storage):
+    """映射后的领域异常必须切断 __cause__，避免 traceback 打印原始 SDK 异常
+    （其中可能原样携带 AK/SK）。"""
+    storage.client.fail_with = FakeTosServerError(message=f"denied for {CONFIG.access_key}")
+    with pytest.raises(StorageServerError) as excinfo:
+        storage.get_object_bytes("liverreview/clip/a.ts")
+    exc = excinfo.value
+    assert exc.__cause__ is None
+    rendered = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    assert CONFIG.access_key not in rendered
+    assert CONFIG.secret_key not in rendered
