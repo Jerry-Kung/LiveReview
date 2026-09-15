@@ -1,6 +1,6 @@
 [project]
 name = "liverreview-backend"
-version = "0.1.1"
+version = "0.1.2"
 description = "LiveReview 后端服务"
 requires-python = ">=3.12"
 dependencies = [
@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "sqlalchemy>=2.0",
     "pydantic-settings>=2.4",
+    "tos>=2.6.0",
 ]
 
 [dependency-groups]
