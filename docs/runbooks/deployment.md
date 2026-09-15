@@ -44,6 +44,10 @@ npm run build    # 构建产物到 dist/
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-拉起后前端在 `http://localhost:8080`，后端健康检查在 `http://localhost:12439/health`。
+拉起后访问 `http://localhost:12439`（前端页面，`/health` 由 nginx 反代到后端）。
+
+后端容器不向宿主机发布端口（仅 compose 网络内 `expose 12439`），对外只保留前端这一个入口，避免与宿主机其它服务抢占端口。
 
 后端镜像内 ffmpeg 已安装，媒体与数据通过命名卷 `liverreview-media`、`liverreview-data` 持久化。
+
+后端镜像直接使用 `pip` 从 `backend/requirements.txt` 安装依赖（apt 与 pip 均已切换为清华源），不依赖 uv。
