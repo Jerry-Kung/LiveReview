@@ -1,0 +1,133 @@
+/*
+  LiveReview 状态页视觉基础
+  母题：直播录屏的时间轴刻度（timecode tick）。
+  每一条状态用一段短刻度条替代通用的圆点徽标，
+  刻度的粗细/长短 + 文字字重共同表达“正常”与“需要留意”，
+  不单独依赖颜色本身。
+*/
+
+:root {
+  --bg: #ececde;
+  --ink: #1c2128;
+  --ink-soft: #565f6b;
+  --tick: #b9c0b2;
+  --ok: #2e6e49;
+  --attention: #6b4209;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: clamp(2.5rem, 10vh, 5.5rem) 1.5rem 3rem;
+}
+
+.title {
+  margin: 0 0 0.75rem;
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+.meta {
+  margin: 0 0 2.25rem;
+  font-size: 0.9375rem;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.status-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.status-line {
+  position: relative;
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+/* 刻度条：借录屏时间轴的刻度形态区分状态，
+   而不是用一个通用的圆点徽标。
+   “ok” 是一段稳定的短刻度；“attention” 是更高、更粗、颜色更深的刻度，
+   即使去掉颜色，长度与粗细差异仍能分辨。 */
+.status-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.35em;
+  width: 0.2rem;
+  border-radius: 1px;
+  background: var(--tick);
+}
+
+.status-line[data-state="ok"] {
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.status-line[data-state="ok"]::before {
+  height: 0.85em;
+  background: var(--ok);
+}
+
+.status-line[data-state="attention"] {
+  font-weight: 650;
+  color: var(--attention);
+}
+
+.status-line[data-state="attention"]::before {
+  height: 1.3em;
+  width: 0.28rem;
+  background: var(--attention);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .status-group {
+    animation: reveal 0.4s ease-out;
+  }
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+@media (max-width: 420px) {
+  .shell {
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+  }
+}

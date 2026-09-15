@@ -16,11 +16,18 @@ const STORAGE_LABELS: Record<string, string> = {
   unavailable: "不可用",
 };
 
+type StatusState = "ok" | "attention";
+
 function storageText(health: Health | null): string {
   if (health === null) return "—";
   const label = STORAGE_LABELS[health.storage ?? ""] ?? "未知";
   const missing = health.storage_missing ?? [];
   return missing.length > 0 ? `${label}（缺少 ${missing.join("、")}）` : label;
+}
+
+function storageState(health: Health | null): StatusState {
+  if (health === null) return "attention";
+  return health.storage === "configured" ? "ok" : "attention";
 }
 
 export default function App() {
@@ -44,11 +51,19 @@ export default function App() {
   const connected = health !== null;
 
   return (
-    <main>
-      <h1>LiveReview</h1>
-      <p>版本 {health?.version ?? "—"} · 环境 {health?.environment ?? "—"}</p>
-      <p>后端：{connected ? "已连接" : "未连接"}</p>
-      <p>对象存储：{storageText(health)}</p>
+    <main className="shell">
+      <h1 className="title">LiveReview</h1>
+      <p className="meta">
+        版本 {health?.version ?? "—"} · 环境 {health?.environment ?? "—"}
+      </p>
+      <div className="status-group">
+        <p className="status-line" data-state={connected ? "ok" : "attention"}>
+          后端：{connected ? "已连接" : "未连接"}
+        </p>
+        <p className="status-line" data-state={storageState(health)}>
+          对象存储：{storageText(health)}
+        </p>
+      </div>
     </main>
   );
 }
