@@ -1,11 +1,14 @@
 """数据库接线：仅 SQLite 引擎与会话工厂，不建业务模型。"""
 
+import logging
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -29,4 +32,5 @@ def check_database_ok() -> bool:
             conn.execute(text("SELECT 1"))
         return True
     except Exception:
+        logger.exception("数据库连通性检查失败")
         return False
