@@ -13,7 +13,7 @@ RUN sed -i \
 COPY pyproject.toml uv.lock ./
 COPY app ./app
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv -i https://pypi.tuna.tsinghua.edu.cn/simple
 RUN uv sync --frozen --no-dev
 
 EXPOSE 12439
