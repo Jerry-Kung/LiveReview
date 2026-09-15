@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Sequence
 
-from app.storage.base import OBJECT_KIND_ORIGINAL, ObjectStorage, StorageClientError, StorageServerError
+from app.storage.base import OBJECT_KIND_ORIGINAL, ObjectStorage, StorageServerError
 
 StepResult = tuple[str, bool, str]
 FetchBytes = Callable[[str], bytes]
@@ -75,7 +75,7 @@ def run_verification(
     except StorageServerError as exc:
         steps.append(("上传对象", False, f"服务端错误 code={exc.code} request_id={exc.request_id} message={exc.message}"))
         return steps
-    except (StorageClientError, Exception) as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         steps.append(("上传对象", False, f"{type(exc).__name__}: {exc}"))
         return steps
 
@@ -119,13 +119,20 @@ def run_verification(
 
     try:
         storage.delete_object(object_key)
-        remaining = None
         try:
-            remaining = storage.get_object_bytes(object_key)
-        except StorageServerError:
-            remaining = None
-        if remaining is None:
-            steps.append(("删除对象", True, f"已删除 key={object_key}"))
+            storage.get_object_bytes(object_key)
+        except StorageServerError as exc:
+            if exc.code == "NoSuchKey" or exc.status_code == 404:
+                steps.append(("删除对象", True, f"已删除 key={object_key}"))
+            else:
+                # 其它服务端错误（如瞬时 5xx）不能确认对象已删除，须视为失败
+                steps.append(
+                    (
+                        "删除对象",
+                        False,
+                        f"删除确认不确定：服务端错误 code={exc.code} request_id={exc.request_id}",
+                    )
+                )
         else:
             steps.append(("删除对象", False, f"删除后仍可读取：{object_key}"))
     except StorageServerError as exc:
