@@ -53,7 +53,26 @@ docker compose -f docker/docker-compose.yml up --build
 
 后端镜像直接使用 `pip` 从 `backend/requirements.txt` 安装依赖（apt 与 pip 均已切换为清华源），不依赖 uv。
 
+### 配置注入
+
+容器内的配置由 `docker/docker-compose.yml` 的 backend 服务从两处注入：
+
+- `env_file: ../backend/.env`（相对 compose 文件所在目录）：在宿主机 `backend/.env` 中配置的 `TOS_*` 等变量于**运行时**注入容器，不打进镜像（`backend/.dockerignore` 已排除 `.env`，凭据不得进入镜像层）。
+- `environment`：`APP_ENV=test`、`APP_HOST=0.0.0.0`、`APP_PORT=12439`、`APP_RELOAD=false`、`DATABASE_URL`、`STORAGE_BACKEND=tos`。同名项优先级高于 `env_file`，容器内的这些取值不随 `.env` 漂移。
+
+因此启动前需先将 `backend/.env.example` 复制为 `backend/.env` 并填好 `TOS_*`。该文件缺失时 compose 会在启动阶段直接报错，不会静默以「无凭据」状态拉起容器。
+
+先确认变量已进入容器（只打印缺失项名称，不回显取值，输出可安全分享）：
+
+```bash
+docker compose -f docker/docker-compose.yml exec backend python -c "from app.config import get_settings as g; s=g(); print(s.storage_backend, s.storage_missing_fields)"
+```
+
+`storage_backend` 应为 `tos`，缺失列表应为 `[]`，否则说明 `backend/.env` 未生效，无需继续自检。
+
 ## 5. 对象存储连通自检（测试环境）
+
+测试环境 `STORAGE_BACKEND` 固定为 `tos`，缺凭据时启动与自检都会明确失败，不会静默回落本地 Mock。
 
 在后端容器内执行，验证 TOS 凭据与网络连通性（上传 → 预签名可访问 → 下载校验 → 删除）：
 

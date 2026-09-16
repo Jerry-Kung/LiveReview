@@ -2,12 +2,20 @@ services:
   backend:
     build:
       context: ../backend
+    # 存储凭据在运行时从宿主机 backend/.env 注入，不打进镜像（.dockerignore 已排除 .env）。
+    # 本文件所在目录为解析基准，故路径为 ../backend/.env。
+    # 该文件缺失时 compose 直接报错，不会静默以「无凭据」状态启动。
+    env_file:
+      - ../backend/.env
+    # environment 优先级高于 env_file：同名项以本列表为准，容器内取值不随 .env 漂移。
     environment:
       APP_ENV: test
       APP_HOST: 0.0.0.0
       APP_PORT: "12439"
       APP_RELOAD: "false"
       DATABASE_URL: sqlite:////app/data/liverreview.db
+      # 测试环境强制真实存储：缺凭据时明确失败，不静默回落到本地 Mock
+      STORAGE_BACKEND: tos
     volumes:
       - liverreview-media:/app/media
       - liverreview-data:/app/data
