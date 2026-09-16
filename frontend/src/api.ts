@@ -130,6 +130,11 @@ export function retryTask(taskId: string): Promise<Task> {
   return request<Task>(`/api/tasks/${taskId}/retry`, { method: "POST" });
 }
 
+/** 删除已上传视频：后端同步清除对象存储中的原始视频、本地分片与记录，不可撤销。 */
+export function deleteTask(taskId: string): Promise<void> {
+  return request<void>(`/api/tasks/${taskId}`, { method: "DELETE" });
+}
+
 /** 按后端下发的分片大小切分文件；末片自动不足一整片。 */
 export function sliceFile(file: File, chunkSize: number): Blob[] {
   const parts: Blob[] = [];

@@ -217,6 +217,89 @@ describe("上传与任务链路", () => {
     expect(screen.queryByText(/失败原因/)).not.toBeInTheDocument();
   });
 
+  it("任务完成后可删除已上传视频并回到初始态", async () => {
+    const deleted: string[] = [];
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      // DELETE 分支必须排在任务查询之前：两者共用同一路径，后者会把删除请求也接走
+      (url, init) => {
+        if (init?.method === "DELETE") {
+          deleted.push(url);
+          return jsonResponse(204, null);
+        }
+        return undefined;
+      },
+      (url) => (url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("succeeded")) : undefined),
+    ]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+    selectFile();
+
+    const button = await screen.findByRole("button", { name: "删除视频" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(deleted).toEqual(["/api/tasks/t1"]));
+    expect(confirm).toHaveBeenCalled();
+    // 删除后回到初始态：不再残留任务状态与对象键
+    await waitFor(() => expect(screen.getByText(/选择一场直播录屏/)).toBeInTheDocument());
+    expect(screen.queryByText(/对象键/)).not.toBeInTheDocument();
+  });
+
+  it("删除确认被取消时不发起请求", async () => {
+    let deleteCalls = 0;
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url, init) => {
+        if (init?.method === "DELETE") {
+          deleteCalls += 1;
+          return jsonResponse(204, null);
+        }
+        return url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("succeeded")) : undefined;
+      },
+    ]);
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<App />);
+    selectFile();
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除视频" }));
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled());
+    expect(deleteCalls).toBe(0);
+    expect(screen.getByRole("button", { name: "删除视频" })).toBeInTheDocument();
+  });
+
+  it("删除失败时展示后端原因，任务状态仍可见", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url, init) => {
+        if (init?.method === "DELETE") {
+          return jsonResponse(502, { detail: "删除失败：mock server failure，request_id=mock-request-id-0001" });
+        }
+        return url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("succeeded")) : undefined;
+      },
+    ]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+    selectFile();
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除视频" }));
+
+    expect(await screen.findByText(/删除失败：.*request_id=mock-request-id-0001/)).toBeInTheDocument();
+    expect(screen.getByText(/任务：已完成/)).toBeInTheDocument();
+  });
+
   it("切换到服务状态页展示存储状态", async () => {
     mockApi([healthRoute]);
     render(<App />);

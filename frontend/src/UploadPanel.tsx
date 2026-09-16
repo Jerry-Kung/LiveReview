@@ -11,6 +11,7 @@ import {
   ApiError,
   completeUpload,
   createUpload,
+  deleteTask,
   fetchTask,
   retryTask,
   sliceFile,
@@ -87,6 +88,7 @@ export default function UploadPanel() {
   // 轮询目标：{ taskId, nonce } 作为 effect 依赖。
   // 用 nonce 而不是 taskId 本身，使「重试同一个任务」也能重新启动轮询循环。
   const [watching, setWatching] = useState<{ taskId: string; nonce: number } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 轮询任务状态，直到进入终态；组件卸载或换文件时停止。
@@ -189,6 +191,26 @@ export default function UploadPanel() {
     if (fileRef.current) fileRef.current.value = "";
   };
 
+  /** 删除已上传视频：由后端清除云端对象、本地分片与记录，成功后回到初始态。 */
+  const handleDelete = async () => {
+    if (!state.taskId) return;
+    const confirmed = window.confirm(
+      "删除后对象存储中的原始视频、本地分片与任务记录都会被清除，且无法恢复。确认删除？"
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setState((prev) => ({ ...prev, error: null }));
+    try {
+      await deleteTask(state.taskId);
+      handleReset();
+    } catch (err) {
+      setState((prev) => ({ ...prev, error: describeError(err).message }));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const percent = state.totalBytes > 0 ? Math.round((state.sentBytes / state.totalBytes) * 100) : 0;
   const busy = state.phase === "uploading" || state.phase === "assembling";
   const failed = state.phase === "error";
@@ -226,13 +248,22 @@ export default function UploadPanel() {
           </p>
           {task.object_key && <p className="hint">对象键：{task.object_key}</p>}
           {task.error && <p className="detail-error">失败原因：{task.error}</p>}
+          {!task.error && state.error && <p className="detail-error">{state.error}</p>}
           <div className="actions">
             {task.status === "failed" && (
               <button type="button" onClick={handleRetryTask}>
                 重新执行任务
               </button>
             )}
-            <button type="button" className="ghost" onClick={handleReset}>
+            <button
+              type="button"
+              className="ghost danger"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? "删除中…" : "删除视频"}
+            </button>
+            <button type="button" className="ghost" onClick={handleReset} disabled={deleting}>
               换一个文件
             </button>
           </div>
