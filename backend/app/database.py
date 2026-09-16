@@ -1,4 +1,4 @@
-"""数据库接线：仅 SQLite 引擎与会话工厂，不建业务模型。"""
+"""数据库接线：SQLite 引擎、会话工厂与建表。"""
 
 import logging
 from pathlib import Path
@@ -23,6 +23,26 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def init_db() -> None:
+    """建立缺失的表结构。
+
+    V0 验证阶段表结构仍在演进，用 `create_all` 保持轻量；已存在的表不会被改动，
+    因此新增字段需在测试环境重建数据库文件（见部署文档）。
+    """
+    from app.models import Base
+
+    Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    """FastAPI 依赖：每个请求一个会话，请求结束后关闭。"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def check_database_ok() -> bool:

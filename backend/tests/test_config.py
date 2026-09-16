@@ -88,5 +88,11 @@ def test_storage_config_maps_settings(monkeypatch):
     assert config.access_key == "ak"
 
 
-def test_app_version_is_0_1_2():
-    assert Settings(_env_file=None).app_version == "0.1.2"
+def test_app_version_is_0_1_3():
+    assert Settings(_env_file=None).app_version == "0.1.3"
+
+
+def test_upload_and_media_defaults():
+    settings = Settings(_env_file=None)
+    assert settings.media_root == "./media"
+    assert settings.upload_chunk_size == 8 * 1024 * 1024

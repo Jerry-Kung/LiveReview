@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.1.2"
+    app_version: str = "0.1.3"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 12439
     app_reload: bool = False
+
+    # 本地产物根目录：上传分片与合并临时文件（容器内为 /app/media，挂命名卷）
+    media_root: str = "./media"
+    # 上传分片大小（字节）：由后端下发给前端，前端不硬编码
+    upload_chunk_size: int = 8 * 1024 * 1024
 
     # 对象存储：auto（有凭据用 TOS，无凭据回落 Mock）/ tos（强制真实，测试环境使用）/ mock
     storage_backend: str = "auto"

@@ -103,6 +103,24 @@ def build_object_key(
     return f"{_normalise_prefix(prefix)}{kind}/{_safe_stem(filename)}_{timestamp}_{token}{ext}"
 
 
+def describe_error(exc: BaseException) -> str:
+    """把存储异常转换为可入库的诊断文本。
+
+    服务端错误的 `request_id` 是向服务商定位问题的唯一凭据，必须随失败原因一起保留；
+    只记录标识与消息，不含凭据与预签名 URL。
+    """
+    if isinstance(exc, StorageServerError):
+        parts = [exc.message]
+        if exc.code:
+            parts.append(f"code={exc.code}")
+        if exc.request_id:
+            parts.append(f"request_id={exc.request_id}")
+        if exc.status_code is not None:
+            parts.append(f"status_code={exc.status_code}")
+        return "，".join(parts)
+    return str(exc)
+
+
 class ObjectStorage(ABC):
     """对象存储契约：上传、下载、读取、删除、预签名与对象键生成。"""
 

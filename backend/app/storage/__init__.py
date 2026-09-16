@@ -20,6 +20,7 @@ from app.storage.base import (
     StorageServerError,
     StoredObject,
     build_object_key,
+    describe_error,
 )
 from app.storage.mock import InMemoryStorage
 
@@ -98,6 +99,7 @@ __all__ = [
     "StoredObject",
     "build_object_key",
     "build_storage",
+    "describe_error",
     "get_storage",
     "reset_storage",
 ]

@@ -17,7 +17,7 @@ def _storage_state(settings) -> tuple[str, list[str]]:
     """返回 (存储状态, 缺失配置项)。
 
     configured：凭据齐全且实现可构造；
-    not_configured：缺必填项，服务仍可用（V0.1.2 尚不依赖存储）；
+    not_configured：缺必填项，服务仍可用（本地无凭据时存储回落 Mock，上传链路仍可验证）；
     unavailable：已配置但构造失败，整体服务应视为降级。
     """
     if not settings.storage_configured:
