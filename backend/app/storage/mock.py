@@ -164,7 +164,15 @@ class InMemoryStorage(ObjectStorage):
         target.parent.mkdir(parents=True, exist_ok=True)
         if object_key in self._large_objects:
             record = self._large_objects[object_key]
-            shutil.copyfile(record.local_path, target)
+            try:
+                shutil.copyfile(record.local_path, target)
+            except OSError as exc:
+                # 大对象内容留在原路径上；源文件被删除或移动后无法再取回，
+                # 统一收敛为领域异常，与其他失败路径保持一致。
+                raise StorageClientError(
+                    f"本地 Mock 的大对象源文件已不可用（object_key={object_key}，"
+                    f"local_path={record.local_path}），无法取回内容：{exc}"
+                ) from None
         else:
             target.write_bytes(self._objects[object_key])
         return target

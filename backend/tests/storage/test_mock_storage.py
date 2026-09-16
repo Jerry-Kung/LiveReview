@@ -181,3 +181,20 @@ def test_large_object_counts_toward_object_count(large_storage, large_payload):
     assert large_storage.object_count == 1
     large_storage.delete_object(key)
     assert large_storage.object_count == 0
+
+
+def test_large_object_missing_source_raises_client_error(large_storage, large_payload, tmp_path):
+    """大对象内容留在原路径；源文件消失时应抛领域异常而非裸 OSError。"""
+    key = large_storage.generate_object_key("original", large_payload.name)
+    large_storage.upload_file(large_payload, key)
+    large_payload.unlink()
+
+    target = tmp_path / "unreachable.ts"
+    with pytest.raises(StorageClientError) as excinfo:
+        large_storage.download_to_file(key, target)
+
+    message = str(excinfo.value)
+    assert "源文件已不可用" in message
+    assert key in message
+    # 异常链被切断，不保留含本地路径的原始 OSError
+    assert excinfo.value.__cause__ is None
