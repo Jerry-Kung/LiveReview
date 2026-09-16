@@ -14,6 +14,8 @@ services:
       APP_PORT: "12439"
       APP_RELOAD: "false"
       DATABASE_URL: sqlite:////app/data/liverreview.db
+      # 上传分片与合并临时文件的落盘位置，与 liverreview-media 卷对应
+      MEDIA_ROOT: /app/media
       # 测试环境强制真实存储：缺凭据时明确失败，不静默回落到本地 Mock
       STORAGE_BACKEND: tos
     volumes:

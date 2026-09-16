@@ -219,3 +219,6 @@ __marimo__/
 
 # Backend local database
 backend/data/
+
+# Backend local media artifacts (upload chunks and assembled temp files)
+backend/media/

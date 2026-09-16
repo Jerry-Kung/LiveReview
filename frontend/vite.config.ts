@@ -14,6 +14,12 @@ export default defineConfig(({ mode }) => {
           target: `http://localhost:${backendPort}`,
           changeOrigin: true,
         },
+        // 上传与任务接口同样转发到后端；分片请求体较大，因此放宽超时
+        "/api": {
+          target: `http://localhost:${backendPort}`,
+          changeOrigin: true,
+          timeout: 300_000,
+        },
       },
     },
     test: {
