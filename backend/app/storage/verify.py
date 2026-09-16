@@ -12,12 +12,19 @@ import hashlib
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 from typing import Callable, Sequence
 
-from app.storage.base import OBJECT_KIND_ORIGINAL, ObjectStorage, StorageServerError
+from app.storage.base import (
+    OBJECT_KIND_ORIGINAL,
+    ObjectStorage,
+    StorageClientError,
+    StorageServerError,
+)
+from app.storage.mock import InMemoryStorage
 
 StepResult = tuple[str, bool, str]
 FetchBytes = Callable[[str], bytes]
@@ -31,6 +38,25 @@ def _default_fetch_bytes(url: str, timeout: float = 30.0) -> bytes:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _make_mock_fetch_bytes(storage: InMemoryStorage) -> FetchBytes:
+    """构造 Mock 后端专用的「预签名 URL 拉取」实现：不发真实 HTTP 请求。
+
+    Mock 的预签名 URL 形如 `https://mock-tos.local/{bucket}/{object_key}?...`，
+    这里按 `/{bucket}/` 前缀从 URL 路径中还原对象键（bucket 为空串时前缀退化为
+    `//`，同样成立），再走内存对象读取，以保留「预签名 URL 定位对象」的语义。
+    """
+
+    def _fetch(url: str) -> bytes:
+        path = urllib.parse.urlparse(url).path
+        prefix = f"/{storage.config.bucket}/"
+        if not path.startswith(prefix):
+            raise StorageClientError(f"无法从 Mock 预签名 URL 中解析对象键：{url}")
+        object_key = path[len(prefix) :]
+        return storage.get_object_bytes(object_key)
+
+    return _fetch
 
 
 def run_verification(
@@ -160,7 +186,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     storage = build_storage(settings)
-    steps = run_verification(storage, keep=args.keep)
+    fetch_bytes = _make_mock_fetch_bytes(storage) if isinstance(storage, InMemoryStorage) else None
+    steps = run_verification(storage, fetch_bytes=fetch_bytes, keep=args.keep)
 
     print("\n连通自检结果：")
     for name, passed, message in steps:

@@ -2,7 +2,7 @@
 
 from app.storage.base import StorageServerError
 from app.storage.mock import FaultMode, InMemoryStorage
-from app.storage.verify import run_verification
+from app.storage.verify import main, run_verification
 
 
 class _FlakyDeleteConfirmStorage(InMemoryStorage):
@@ -114,3 +114,46 @@ def test_delete_confirmation_with_transient_server_error_is_not_treated_as_delet
     failed = {name: message for name, passed, message in steps if not passed}
     assert "删除对象" in failed
     assert "mock-request-id-9999" in failed["删除对象"]
+
+
+def test_main_succeeds_with_mock_backend(monkeypatch):
+    # STORAGE_BACKEND=mock 时六步应真实全绿，不应因固定的假 URL 而在第 4 步失败
+    from app.config import get_settings
+
+    for key in (
+        "TOS_ACCESS_KEY",
+        "TOS_SECRET_KEY",
+        "TOS_ENDPOINT",
+        "TOS_REGION",
+        "TOS_BUCKET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("STORAGE_BACKEND", "mock")
+    get_settings.cache_clear()
+    try:
+        assert main([]) == 0
+    finally:
+        get_settings.cache_clear()
+
+
+def test_main_fails_readably_without_credentials_in_auto_mode(monkeypatch, capsys):
+    # 无凭据的 auto 模式行为不变：可读提示、退出码 1、无 traceback
+    from app.config import get_settings
+
+    for key in (
+        "TOS_ACCESS_KEY",
+        "TOS_SECRET_KEY",
+        "TOS_ENDPOINT",
+        "TOS_REGION",
+        "TOS_BUCKET",
+        "STORAGE_BACKEND",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
+    try:
+        assert main([]) == 1
+    finally:
+        get_settings.cache_clear()
+    output = capsys.readouterr().out
+    assert "缺少必填配置" in output
+    assert "Traceback" not in output

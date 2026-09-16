@@ -138,3 +138,46 @@ def test_frozen_clock_still_produces_distinct_keys():
     keys = {storage.generate_object_key("clip", "same.ts") for _ in range(3)}
     assert len(keys) == 3
     assert all(k.startswith("liverreview/clip/same_1731657645123_") for k in keys)
+
+
+# —— 大对象：注入一个很小的阈值，不真的写 32MiB 文件 ——
+
+
+@pytest.fixture
+def large_storage() -> InMemoryStorage:
+    # 阈值调小为 16 字节，便于用小文件模拟「超过阈值的大对象」路径
+    return InMemoryStorage(
+        now_ms=1731657645123, unique_token="deadbeef", max_in_memory_object_bytes=16
+    )
+
+
+@pytest.fixture
+def large_payload(tmp_path: Path) -> Path:
+    path = tmp_path / "large.ts"
+    path.write_bytes(b"liverreview-large-object-payload")  # 超过 16 字节阈值
+    return path
+
+
+def test_large_object_get_bytes_raises_client_error(large_storage, large_payload):
+    key = large_storage.generate_object_key("original", large_payload.name)
+    large_storage.upload_file(large_payload, key)
+    with pytest.raises(StorageClientError) as excinfo:
+        large_storage.get_object_bytes(key)
+    assert "大对象" in str(excinfo.value)
+
+
+def test_large_object_can_still_be_downloaded(large_storage, large_payload, tmp_path):
+    key = large_storage.generate_object_key("original", large_payload.name)
+    large_storage.upload_file(large_payload, key)
+    target = tmp_path / "downloaded-large.ts"
+    returned = large_storage.download_to_file(key, target)
+    assert returned == target
+    assert target.read_bytes() == large_payload.read_bytes()
+
+
+def test_large_object_counts_toward_object_count(large_storage, large_payload):
+    key = large_storage.generate_object_key("original", large_payload.name)
+    large_storage.upload_file(large_payload, key)
+    assert large_storage.object_count == 1
+    large_storage.delete_object(key)
+    assert large_storage.object_count == 0

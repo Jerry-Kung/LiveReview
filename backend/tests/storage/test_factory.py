@@ -1,5 +1,7 @@
 """工厂测试：三种 storage_backend 取值的选择与异常行为。"""
 
+import importlib.util
+
 import pytest
 
 from app.config import Settings
@@ -54,6 +56,23 @@ def test_tos_backend_requires_credentials(monkeypatch):
     message = str(excinfo.value)
     assert "TOS_ACCESS_KEY" in message
     assert "TOS_SECRET_KEY" in message
+
+
+def test_tos_backend_without_sdk_raises_client_error(monkeypatch):
+    settings = _settings_without_env(monkeypatch, STORAGE_BACKEND="tos", **TOS_ENV)
+
+    real_find_spec = importlib.util.find_spec
+
+    def _fake_find_spec(name, *args, **kwargs):
+        if name == "tos":
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+
+    with pytest.raises(StorageClientError) as excinfo:
+        build_storage(settings)
+    assert "tos" in str(excinfo.value)
 
 
 def test_unknown_backend_is_rejected(monkeypatch):

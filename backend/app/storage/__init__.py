@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import threading
 
@@ -52,6 +53,9 @@ def build_storage(settings) -> ObjectStorage:
             missing,
         )
         return InMemoryStorage(settings.storage_config())
+
+    if importlib.util.find_spec("tos") is None:
+        raise StorageClientError("未安装 TOS SDK（tos>=2.6.0），无法启用 TOS 存储；请先执行 `uv add tos` 或参考部署文档安装依赖")
 
     from app.storage.tos_backend import TosStorage
 
