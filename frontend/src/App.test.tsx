@@ -7,10 +7,13 @@ describe("App", () => {
 
   beforeEach(() => {
     globalThis.fetch = vi.fn();
+    // 状态页现在是第二个标签屏，直接以 hash 进入
+    window.location.hash = "status";
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    window.location.hash = "";
     vi.restoreAllMocks();
   });
 
@@ -33,7 +36,7 @@ describe("App", () => {
         Promise.resolve({
           status: "ok",
           service: "LiveReview",
-          version: "0.1.2",
+          version: "0.1.3",
           environment: "development",
           database: "ok",
         }),
@@ -51,7 +54,7 @@ describe("App", () => {
         Promise.resolve({
           status: "ok",
           service: "LiveReview",
-          version: "0.1.2",
+          version: "0.1.3",
           environment: "development",
           database: "ok",
           storage: "configured",
@@ -71,7 +74,7 @@ describe("App", () => {
         Promise.resolve({
           status: "ok",
           service: "LiveReview",
-          version: "0.1.2",
+          version: "0.1.3",
           environment: "development",
           database: "ok",
           storage: "not_configured",
@@ -92,7 +95,7 @@ describe("App", () => {
         Promise.resolve({
           status: "degraded",
           service: "LiveReview",
-          version: "0.1.2",
+          version: "0.1.3",
           environment: "development",
           database: "ok",
           storage: "unavailable",
@@ -112,7 +115,7 @@ describe("App", () => {
         Promise.resolve({
           status: "ok",
           service: "LiveReview",
-          version: "0.1.2",
+          version: "0.1.3",
           environment: "development",
           database: "ok",
         }),
