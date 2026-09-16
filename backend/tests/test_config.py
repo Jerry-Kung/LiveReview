@@ -89,7 +89,7 @@ def test_storage_config_maps_settings(monkeypatch):
 
 
 def test_app_version_is_0_1_3():
-    assert Settings(_env_file=None).app_version == "0.1.3"
+    assert Settings(_env_file=None).app_version == "0.1.3.1"
 
 
 def test_upload_and_media_defaults():

@@ -15,7 +15,7 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models import Task, utcnow
+from app.models import Task, UploadSession, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,21 @@ def reset_task_for_retry(db: Session, task_id: str) -> Task | None:
     if result.rowcount == 0:
         return None
     return db.get(Task, task_id)
+
+
+def remove_task_records(db: Session, task: Task) -> None:
+    """删除任务行与其上传会话行；先删子行再删父行，避免外键残留。
+
+    会话与任务一并删除：上传会话对用户没有独立意义，留下只会成为孤儿记录。
+    """
+    upload_id = task.upload_id
+    db.delete(task)
+    db.flush()
+    if upload_id:
+        session = db.get(UploadSession, upload_id)
+        if session is not None:
+            db.delete(session)
+    db.commit()
 
 
 def list_tasks(db: Session, limit: int = 20) -> list[Task]:

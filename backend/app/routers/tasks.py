@@ -1,4 +1,4 @@
-"""任务接口：查询状态与失败原因、重新发起失败任务。"""
+"""任务接口：查询状态与失败原因、重新发起失败任务、删除已上传视频。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,27 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.config import Settings, get_settings
 from app.database import get_db
+from app.deletion import delete_task_assets
 from app.models import Task
 from app.schemas import TaskListResponse, TaskResponse
-from app.tasks import STATUS_FAILED, list_tasks, reset_task_for_retry, submit
+from app.storage import StorageError, describe_error
+from app.tasks import (
+    STATUS_FAILED,
+    STATUS_PROCESSING,
+    STATUS_UPLOADING,
+    list_tasks,
+    reset_task_for_retry,
+    submit,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+# 这两个状态下后台执行器可能正在读写对象，删除会造成半途而废的清理
+BUSY_STATUSES = (STATUS_UPLOADING, STATUS_PROCESSING)
 
 
 def _to_response(task: Task) -> TaskResponse:
@@ -76,3 +89,31 @@ def retry_task(task_id: str, db: Session = Depends(get_db)) -> TaskResponse:
     submit(task_id)
     logger.info("任务 %s 已重新入队", task_id)
     return _to_response(reset)
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_task(
+    task_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """删除已上传的视频：清除对象存储中的原始视频、本地分片与任务记录。
+
+    删除不可撤销，因此失败时一律保留记录并返回原因；重复删除返回 404（已不存在）。
+    """
+    task = _get_or_404(db, task_id)
+    if task.status in BUSY_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"任务当前状态为 {task.status}，上传或处理进行中，无法删除",
+        )
+
+    try:
+        delete_task_assets(db, task, settings.media_root)
+    except StorageError as exc:
+        db.rollback()
+        message = describe_error(exc)
+        logger.error("任务 %s 删除失败：%s", task_id, message)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"删除失败：{message}"
+        ) from exc

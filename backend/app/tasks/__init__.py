@@ -11,6 +11,7 @@ from app.tasks.runner import (
     TASK_KIND_INGEST,
     claim_task,
     list_tasks,
+    remove_task_records,
     reset_task_for_retry,
     run_task,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "TASK_KIND_INGEST",
     "claim_task",
     "list_tasks",
+    "remove_task_records",
     "requeue_pending",
     "reset_task_for_retry",
     "run_sync",

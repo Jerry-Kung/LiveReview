@@ -434,3 +434,126 @@ def test_requeue_pending_picks_up_uploaded_tasks(db_session_factory, monkeypatch
 
     assert requeue_pending() == 1
     assert submitted == ["t4"]
+
+
+# —— 删除视频（v0.1.3.1）——
+
+
+def _upload_one(client, storage) -> tuple[str, str, str]:
+    """走完一次上传，返回 (upload_id, task_id, object_key)。"""
+    data = _create(client)
+    upload_id = data["upload_id"]
+    task_id = data["task_id"]
+    _upload_all(client, upload_id)
+    body = client.post(f"/api/uploads/{upload_id}/complete").json()
+    return upload_id, task_id, body["object_key"]
+
+
+def test_delete_removes_object_records_and_chunks(client, storage, media_root, db_session_factory):
+    upload_id, task_id, object_key = _upload_one(client, storage)
+    assert storage.object_count == 1
+
+    resp = client.delete(f"/api/tasks/{task_id}")
+    assert resp.status_code == 204, resp.text
+
+    # 云端对象已删除
+    assert storage.object_count == 0
+    # 任务与上传会话记录均已删除
+    assert client.get(f"/api/tasks/{task_id}").status_code == 404
+    assert client.get(f"/api/uploads/{upload_id}").status_code == 404
+    assert client.get("/api/tasks").json()["items"] == []
+
+    from app.models import Task, UploadSession
+
+    db = db_session_factory()
+    try:
+        assert db.get(Task, task_id) is None
+        assert db.get(UploadSession, upload_id) is None
+    finally:
+        db.close()
+
+    # 本地分片目录与合并临时文件不残留
+    assert not chunk_store.chunks_dir(media_root, upload_id).exists()
+    assert not chunk_store.merged_path(media_root, upload_id).exists()
+
+
+def test_delete_unknown_task_returns_404(client):
+    assert client.delete("/api/tasks/nope").status_code == 404
+
+
+def test_delete_is_not_repeatable(client, storage):
+    """删除是破坏性操作：重复删除必须返回 404，而不是静默成功掩盖误操作。"""
+    _, task_id, _ = _upload_one(client, storage)
+
+    assert client.delete(f"/api/tasks/{task_id}").status_code == 204
+    assert client.delete(f"/api/tasks/{task_id}").status_code == 404
+
+
+def test_delete_rejected_while_upload_in_progress(client, media_root):
+    """上传中的任务被拒：此时原始视频尚未落存储，删除会让分片与会话状态互相打架。"""
+    data = _create(client)
+    upload_id = data["upload_id"]
+    task_id = data["task_id"]
+    client.put(f"/api/uploads/{upload_id}/chunks/0", content=_chunk_body(0))
+
+    resp = client.delete(f"/api/tasks/{task_id}")
+    assert resp.status_code == 409
+    assert "无法删除" in resp.json()["detail"]
+    # 记录与分片原样保留
+    assert client.get(f"/api/tasks/{task_id}").status_code == 200
+    assert chunk_store.received_indices(media_root, upload_id) == [0]
+
+
+def test_delete_rejected_while_processing(client, db_session_factory):
+    """处理中的任务被拒：执行器可能正在读写该对象。"""
+    data = _create(client)
+    task_id = data["task_id"]
+
+    from app.models import Task
+    from app.tasks import STATUS_PROCESSING
+
+    db = db_session_factory()
+    try:
+        task = db.get(Task, task_id)
+        task.status = STATUS_PROCESSING
+        task.process_token = "token-1"
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.delete(f"/api/tasks/{task_id}")
+    assert resp.status_code == 409
+    assert "processing" in resp.json()["detail"]
+    assert client.get(f"/api/tasks/{task_id}").status_code == 200
+
+
+def test_delete_storage_failure_keeps_records(client, storage):
+    """云端删除失败时保留记录：否则对象留在桶里且再无任何线索可定位。"""
+    _, task_id, object_key = _upload_one(client, storage)
+    storage.set_fault_mode(FaultMode.SERVER)
+
+    resp = client.delete(f"/api/tasks/{task_id}")
+    assert resp.status_code == 502
+    assert "删除失败" in resp.json()["detail"]
+    assert "mock-request-id-0001" in resp.json()["detail"]
+
+    # 记录与对象都还在，重新发起删除仍可成功
+    assert client.get(f"/api/tasks/{task_id}").json()["object_key"] == object_key
+    storage.set_fault_mode(FaultMode.NONE)
+    assert client.delete(f"/api/tasks/{task_id}").status_code == 204
+    assert storage.object_count == 0
+
+
+def test_delete_failed_upload_clears_leftover_chunks(client, storage, media_root):
+    """入库失败的任务没有对象键，但本地留有分片，删除要能清掉这些残留。"""
+    data = _create(client)
+    upload_id = data["upload_id"]
+    task_id = data["task_id"]
+    _upload_all(client, upload_id)
+    storage.set_fault_mode(FaultMode.SERVER)
+    client.post(f"/api/uploads/{upload_id}/complete")
+    assert chunk_store.received_indices(media_root, upload_id) == [0, 1, 2]
+
+    assert client.delete(f"/api/tasks/{task_id}").status_code == 204
+    assert not chunk_store.chunks_dir(media_root, upload_id).exists()
+    assert client.get(f"/api/tasks/{task_id}").status_code == 404

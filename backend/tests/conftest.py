@@ -98,6 +98,9 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_settings] = lambda: test_settings
+    # 各业务模块用 `from app.storage import get_storage` 直接绑定，因此按模块逐个替换
+    monkeypatch.setattr("app.storage.get_storage", lambda: storage)
+    monkeypatch.setattr("app.deletion.get_storage", lambda: storage)
     monkeypatch.setattr(uploads_module, "get_storage", lambda: storage)
     # 关掉线程池：任务在本进程内同步执行，测试无需等待后台线程
     monkeypatch.setattr("app.tasks.executor._get_executor", lambda: _SyncExecutor())
