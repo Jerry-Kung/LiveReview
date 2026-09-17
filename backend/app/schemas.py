@@ -53,6 +53,28 @@ class MissingChunksDetail(BaseModel):
     total_chunks: int
 
 
+class TaskMetadataResponse(BaseModel):
+    """媒体探测结果（V0.1.4）：任务未探测成功时整个对象为 null。
+
+    字段取值遵循「拿不到就是 null」：探测结果缺字段时不填 0 或空串，避免消费方把未知
+    当成已知。`probed_at` 是判断「是否探测过」的唯一依据。
+    """
+
+    format_name: str | None = None
+    duration_seconds: float | None = None
+    video_codec: str | None = None
+    width: int | None = None
+    height: int | None = None
+    frame_rate: str | None = None
+    audio_codec: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+    stream_count: int | None = None
+    bit_rate: int | None = None
+    content_hash: str | None = None
+    probed_at: datetime
+
+
 class TaskResponse(BaseModel):
     id: str
     kind: str
@@ -62,6 +84,7 @@ class TaskResponse(BaseModel):
     object_key: str | None = None
     size: int | None = None
     error: str | None = None
+    metadata: TaskMetadataResponse | None = None
     created_at: datetime
     updated_at: datetime
 

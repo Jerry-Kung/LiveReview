@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.1.3.1"
+    app_version: str = "0.1.4"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -42,9 +42,15 @@ class Settings(BaseSettings):
     tos_object_prefix: str = "liverreview/"
     tos_presigned_ttl_seconds: int = 3600
 
-    # 媒体工具路径（V0.1.4 起使用，此处仅预留）
+    # 媒体工具路径（V0.1.4 起用于 ffprobe 探测，FFMPEG 转码在 V0.1.5 使用）。
+    # FFPROBE_PATH 既可以是单个可执行文件名，也可以是「解释器 + 脚本」形式的列表
+    # （列表供测试用假 ffprobe 脚本替换真实工具）。
     ffmpeg_path: str = "ffmpeg"
-    ffprobe_path: str = "ffprobe"
+    ffprobe_path: str | list[str] = "ffprobe"
+    # 单次探测超时（秒）：1～2GB 的 TS 配 -count_packets 需要完整读一遍文件，留足余量
+    probe_timeout_seconds: int = 300
+    # ffprobe 标准输出长度上限（字节）：拦截异常输入导致的输出膨胀
+    probe_max_output_bytes: int = 8 * 1024 * 1024
 
     @property
     def storage_missing_fields(self) -> list[str]:

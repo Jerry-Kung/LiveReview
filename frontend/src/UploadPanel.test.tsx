@@ -32,7 +32,7 @@ function jsonResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
-function taskResponse(status: string, error: string | null = null) {
+function taskResponse(status: string, error: string | null = null, metadata: unknown = null) {
   return {
     id: "t1",
     kind: "ingest",
@@ -42,10 +42,27 @@ function taskResponse(status: string, error: string | null = null) {
     object_key: "liverreview/original/live_1_abcd.ts",
     size: 20,
     error,
+    metadata,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
 }
+
+const METADATA = {
+  format_name: "mpegts",
+  duration_seconds: 3725,
+  video_codec: "h264",
+  width: 1920,
+  height: 1080,
+  frame_rate: "25/1",
+  audio_codec: "aac",
+  sample_rate: 48000,
+  channels: 2,
+  stream_count: 2,
+  bit_rate: 3500000,
+  content_hash: "a".repeat(64),
+  probed_at: "2026-01-01T00:00:01Z",
+};
 
 /** 用可组合的路由表替换 fetch：每个断言只关心自己那条链路的响应。 */
 function mockApi(routes: Array<(url: string, init?: RequestInit) => Response | undefined>) {
@@ -305,5 +322,106 @@ describe("上传与任务链路", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "服务状态" }));
     expect(await screen.findByText(/对象存储：已配置/)).toBeInTheDocument();
+  });
+
+  it("探测成功后展示媒体信息，便于核对与实际媒体是否一致", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) =>
+        url.startsWith("/api/tasks/")
+          ? jsonResponse(200, taskResponse("succeeded", null, METADATA))
+          : undefined,
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    expect(screen.getByText("1:02:05")).toBeInTheDocument();
+    expect(screen.getByText("1920×1080")).toBeInTheDocument();
+    expect(screen.getByText("25/1")).toBeInTheDocument();
+    expect(screen.getByText("h264")).toBeInTheDocument();
+    expect(screen.getByText("aac · 48.0 kHz · 立体声")).toBeInTheDocument();
+    expect(screen.getByText("mpegts")).toBeInTheDocument();
+  });
+
+  it("元数据字段缺失时显示占位而不是空值", async () => {
+    // TS 录屏常见：没有帧率、没有分辨率、没有音轨，不能显示成 0 或空白
+    const sparse = {
+      ...METADATA,
+      duration_seconds: null,
+      width: null,
+      height: null,
+      frame_rate: null,
+      audio_codec: null,
+      sample_rate: null,
+      channels: null,
+      format_name: null,
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) =>
+        url.startsWith("/api/tasks/")
+          ? jsonResponse(200, taskResponse("succeeded", null, sparse))
+          : undefined,
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    const metadata = screen.getByLabelText("媒体信息");
+    expect(metadata.querySelectorAll("dd")).toHaveLength(6);
+    for (const value of Array.from(metadata.querySelectorAll("dd"))) {
+      expect(value.textContent).not.toBe("");
+    }
+    expect(screen.queryByText("1920×1080")).not.toBeInTheDocument();
+  });
+
+  it("未探测的任务不展示媒体信息", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => (url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("processing")) : undefined),
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：处理中/)).toBeInTheDocument());
+    expect(screen.queryByLabelText("媒体信息")).not.toBeInTheDocument();
+  });
+
+  it("探测失败时展示失败原因与重试入口", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) =>
+        url.startsWith("/api/tasks/")
+          ? jsonResponse(
+              200,
+              taskResponse("failed", "ProbeError: ffprobe 探测失败（退出码 1）：Invalid data found")
+            )
+          : undefined,
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    expect(await screen.findByText(/失败原因：ProbeError/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Invalid data found/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "重新执行任务" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("媒体信息")).not.toBeInTheDocument();
   });
 });

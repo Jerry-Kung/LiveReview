@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -56,6 +56,24 @@ class Task(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 认领判据：执行器写入 token 后据此判断任务是否已被处理，避免重复执行
     process_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # 媒体探测结果（V0.1.4）：常用字段升为列，供验收核对与 V0.1.5 切分直接取用；
+    # 完整 ffprobe 输出另存 metadata_json，两者同时写入，不依赖消费方解析 JSON。
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    media_format: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    video_codec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frame_rate: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    audio_codec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sample_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channels: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stream_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    media_bit_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    probed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     upload_id: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("upload_sessions.id"), nullable=True
     )
@@ -69,3 +87,8 @@ class Task(Base):
     @property
     def filename(self) -> str | None:
         return self.upload.filename if self.upload is not None else None
+
+    @property
+    def has_metadata(self) -> bool:
+        """是否已有探测结果：供接口与前端区分「未探测」与「探测出空值」。"""
+        return self.probed_at is not None

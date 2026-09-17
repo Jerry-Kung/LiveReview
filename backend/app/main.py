@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     tasks.shutdown()
 
 
-app = FastAPI(title="LiveReview", version="0.1.3.1", lifespan=lifespan)
+app = FastAPI(title="LiveReview", version="0.1.4", lifespan=lifespan)
 
 app.include_router(health.router)
 app.include_router(uploads.router)

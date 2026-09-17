@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,15 @@ from app.storage import InMemoryStorage, StorageConfig
 
 CHUNK_SIZE = 1024 * 1024
 FILE_SIZE = 3 * CHUNK_SIZE  # 3 片，便于构造缺片与乱序场景
+
+
+def fake_ffprobe_args() -> list[str]:
+    """假 ffprobe 的命令行前缀：本地不部署 FFmpeg，用脚本替代以覆盖完整链路。
+
+    以「解释器 + 脚本」的形式给出，Windows 与 POSIX 都能执行，不需要 shebang 与执行位。
+    """
+    script = Path(__file__).with_name("fake_ffprobe.py")
+    return [sys.executable, str(script)]
 
 
 @pytest.fixture
@@ -39,7 +49,13 @@ def media_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def test_settings(media_root: Path) -> Settings:
     # _env_file=None：不读本机 .env，避免本地凭据影响测试结果
-    return Settings(_env_file=None, media_root=str(media_root), upload_chunk_size=CHUNK_SIZE)
+    # ffprobe 指向假实现：本机不部署 FFmpeg，但探测链路仍需被完整覆盖
+    return Settings(
+        _env_file=None,
+        media_root=str(media_root),
+        upload_chunk_size=CHUNK_SIZE,
+        ffprobe_path=fake_ffprobe_args(),
+    )
 
 
 @pytest.fixture
@@ -101,10 +117,13 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
     # 各业务模块用 `from app.storage import get_storage` 直接绑定，因此按模块逐个替换
     monkeypatch.setattr("app.storage.get_storage", lambda: storage)
     monkeypatch.setattr("app.deletion.get_storage", lambda: storage)
+    monkeypatch.setattr("app.tasks.runner.get_storage", lambda: storage)
     monkeypatch.setattr(uploads_module, "get_storage", lambda: storage)
     # 关掉线程池：任务在本进程内同步执行，测试无需等待后台线程
     monkeypatch.setattr("app.tasks.executor._get_executor", lambda: _SyncExecutor())
     monkeypatch.setattr("app.tasks.executor.SessionLocal", db_session_factory)
+    # 任务体不走依赖注入，直接取配置单例；测试里指向假 ffprobe，避免依赖本机安装 FFmpeg
+    monkeypatch.setattr("app.tasks.runner.get_settings", lambda: test_settings)
 
     with TestClient(app) as test_client:
         yield test_client

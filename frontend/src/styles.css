@@ -248,6 +248,34 @@ body {
   }
 }
 
+/* 探测结论：两列键值网格，窄屏折成单列。数值用等宽数字，便于逐项核对 */
+.metadata {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.4rem 1rem;
+  margin: 0;
+  padding: 0.6rem 0 0;
+  border-top: 1px solid var(--tick);
+}
+
+.metadata-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.metadata-item dt {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.metadata-item dd {
+  margin: 0;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
 :focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;

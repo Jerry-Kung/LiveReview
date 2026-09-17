@@ -21,6 +21,22 @@ export type UploadStatusResponse = Omit<UploadCreateResponse, "task_id"> & {
   error: string | null;
 };
 
+export type TaskMetadata = {
+  format_name: string | null;
+  duration_seconds: number | null;
+  video_codec: string | null;
+  width: number | null;
+  height: number | null;
+  frame_rate: string | null;
+  audio_codec: string | null;
+  sample_rate: number | null;
+  channels: number | null;
+  stream_count: number | null;
+  bit_rate: number | null;
+  content_hash: string | null;
+  probed_at: string;
+};
+
 export type Task = {
   id: string;
   kind: string;
@@ -30,6 +46,8 @@ export type Task = {
   object_key: string | null;
   size: number | null;
   error: string | null;
+  /** 媒体探测结果：未探测成功时为 null（与「探测出空值」区分开） */
+  metadata: TaskMetadata | null;
   created_at: string;
   updated_at: string;
 };

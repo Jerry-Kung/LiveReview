@@ -2,6 +2,8 @@
 
 from app.tasks.executor import requeue_pending, run_sync, shutdown, submit
 from app.tasks.runner import (
+    PROGRESS_DONE,
+    PROGRESS_PROBING,
     STATUS_FAILED,
     STATUS_PROCESSING,
     STATUS_SUCCEEDED,
@@ -11,12 +13,15 @@ from app.tasks.runner import (
     TASK_KIND_INGEST,
     claim_task,
     list_tasks,
+    reclaim_stale_processing,
     remove_task_records,
     reset_task_for_retry,
     run_task,
 )
 
 __all__ = [
+    "PROGRESS_DONE",
+    "PROGRESS_PROBING",
     "STATUS_FAILED",
     "STATUS_PROCESSING",
     "STATUS_SUCCEEDED",
@@ -26,6 +31,7 @@ __all__ = [
     "TASK_KIND_INGEST",
     "claim_task",
     "list_tasks",
+    "reclaim_stale_processing",
     "remove_task_records",
     "requeue_pending",
     "reset_task_for_retry",

@@ -12,6 +12,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app import chunks as chunk_store
+from app.media.paths import remove_original
 from app.models import Task
 from app.storage import get_storage
 
@@ -27,6 +28,9 @@ def delete_task_assets(db: Session, task: Task, media_root: str) -> None:
     if task.object_key:
         # 先删云端对象：失败即中止，避免出现「记录已删、视频还留在桶里」的孤儿对象
         get_storage().delete_object(task.object_key)
+
+    # 待探测的本地副本按任务 id 命名，与对象存储中的对象一并清理
+    remove_original(media_root, task.id, task.filename)
 
     # 分片目录与合并临时文件是尽力而为的清理，不因本地文件异常阻断记录删除
     if task.upload_id:

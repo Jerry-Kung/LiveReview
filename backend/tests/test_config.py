@@ -88,11 +88,28 @@ def test_storage_config_maps_settings(monkeypatch):
     assert config.access_key == "ak"
 
 
-def test_app_version_is_0_1_3():
-    assert Settings(_env_file=None).app_version == "0.1.3.1"
+def test_app_version_is_0_1_4():
+    assert Settings(_env_file=None).app_version == "0.1.4"
 
 
 def test_upload_and_media_defaults():
     settings = Settings(_env_file=None)
     assert settings.media_root == "./media"
     assert settings.upload_chunk_size == 8 * 1024 * 1024
+
+
+def test_probe_defaults():
+    settings = Settings(_env_file=None)
+    assert settings.ffprobe_path == "ffprobe"
+    assert settings.probe_timeout_seconds == 300
+    assert settings.probe_max_output_bytes == 8 * 1024 * 1024
+
+
+def test_probe_env_overrides(monkeypatch):
+    monkeypatch.setenv("FFPROBE_PATH", "/usr/bin/ffprobe")
+    monkeypatch.setenv("PROBE_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("PROBE_MAX_OUTPUT_BYTES", "1024")
+    settings = Settings(_env_file=None)
+    assert settings.ffprobe_path == "/usr/bin/ffprobe"
+    assert settings.probe_timeout_seconds == 30
+    assert settings.probe_max_output_bytes == 1024

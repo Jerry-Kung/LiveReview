@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import chunks as chunk_store
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.media.paths import original_path as media_original_path
 from app.models import Task, UploadSession, utcnow
 from app.schemas import (
     MissingChunksDetail,
@@ -214,11 +215,14 @@ def complete_upload(
     session.updated_at = utcnow()
     db.commit()
 
+    local_copy = media_original_path(settings.media_root, task.id, session.filename)
     try:
         merged = chunk_store.assemble(settings.media_root, upload_id, total, session.declared_size)
         storage = get_storage()
         object_key = storage.generate_object_key(OBJECT_KIND_ORIGINAL, session.filename)
         stored = storage.upload_file(merged, object_key)
+        # 合并产物转存为「待探测的本地副本」：探测直接用它，避免再从对象存储拉一遍 GB 级文件
+        chunk_store.move_merged_to_original(merged, local_copy)
     except (chunk_store.UploadError, StorageError) as exc:
         _mark_failed(db, session, task, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"上传失败：{exc}") from exc
@@ -227,8 +231,10 @@ def complete_upload(
         _mark_failed(db, session, task, exc)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"上传失败：{exc}") from exc
     finally:
-        # 失败时保留分片：用户重新提交时无需再传一遍 2GB 原文件
-        chunk_store.cleanup_merged(settings.media_root, upload_id)
+        # 失败时保留分片：用户重新提交时无需再传一遍 2GB 原文件。
+        # 合并产物已转存为本地副本时不再清理，它是本次上传唯一的完整文件。
+        if not local_copy.is_file():
+            chunk_store.cleanup_merged(settings.media_root, upload_id)
 
     # 对象已在存储中就位，本地分片完成使命
     chunk_store.cleanup(settings.media_root, upload_id)

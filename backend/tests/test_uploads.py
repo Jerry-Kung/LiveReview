@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from unittest.mock import patch
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app import chunks as chunk_store
@@ -275,8 +278,12 @@ def test_retry_rejected_for_task_whose_upload_failed(client, storage):
     assert "只有已入库且失败的任务可以重新执行" in resp.json()["detail"]
 
 
-def test_retry_after_processing_failure_succeeds(client, storage, db_session_factory):
-    """已落存储的任务在后台处理失败后可重试，且复用同一对象，不重复上传。"""
+def test_retry_after_processing_failure_succeeds(client, storage, db_session_factory, media_root, tmp_path):
+    """已落存储的任务在后台处理失败后可重试，且复用同一对象，不重复上传。
+
+    重试时上传留下的本地副本已被清理，探测会按对象键从存储取回，因此这里预置对象内容。
+    """
+    from app.media.paths import original_path
     from app.models import Task, utcnow
 
     data = _create(client)
@@ -288,12 +295,16 @@ def test_retry_after_processing_failure_succeeds(client, storage, db_session_fac
     client.post(f"/api/uploads/{upload_id}/complete")
     assert client.get(f"/api/tasks/{task_id}").json()["status"] == "failed"
 
-    # 模拟「原始视频已入库、后台处理阶段失败」这一场景
+    # 模拟「原始视频已入库、后台处理阶段失败」这一场景：对象在存储中，本地副本已被清理
     storage.set_fault_mode(FaultMode.NONE)
+    object_key = "liverreview/original/live_1_abcdabcd.ts"
+    source = tmp_path / "stored.ts"
+    source.write_bytes(b"stored-original")
+    storage.upload_file(source, object_key)
     db = db_session_factory()
     try:
         task = db.get(Task, task_id)
-        task.object_key = "liverreview/original/live_1_abcdabcd.ts"
+        task.object_key = object_key
         task.size = FILE_SIZE
         task.status = "failed"
         task.error = "探测失败：mock"
@@ -301,6 +312,7 @@ def test_retry_after_processing_failure_succeeds(client, storage, db_session_fac
         db.commit()
     finally:
         db.close()
+    assert not original_path(media_root, task_id, "live.ts").exists()
 
     retry = client.post(f"/api/tasks/{task_id}/retry")
     assert retry.status_code == 200, retry.text
@@ -308,9 +320,13 @@ def test_retry_after_processing_failure_succeeds(client, storage, db_session_fac
     latest = client.get(f"/api/tasks/{task_id}").json()
     assert latest["status"] == "succeeded"
     assert latest["error"] is None
-    assert latest["object_key"] == "liverreview/original/live_1_abcdabcd.ts"
+    assert latest["object_key"] == object_key
+    assert latest["metadata"]["duration_seconds"] == 600.0
     # 对象已在存储中，重试不重复上传
-    assert len(storage.uploaded_keys) == 0
+    assert len(storage.uploaded_keys) == 1
+
+    # 探测成功后再删掉本地副本与对象的临时夹具内容，避免影响后续断言
+    client.delete(f"/api/tasks/{task_id}")
 
 
 def test_retry_rejected_for_non_failed_task(client):
@@ -392,6 +408,34 @@ def test_task_without_object_key_fails_with_reason(db_session_factory):
         db.close()
 
 
+def test_move_merged_to_original_falls_back_to_copy_on_cross_device(tmp_path):
+    """跨设备时 Path.replace 不可用，转存必须退化为复制并清掉源文件，而不是直接报错。"""
+    merged = tmp_path / "assembling" / "u1.part"
+    merged.parent.mkdir(parents=True)
+    merged.write_bytes(b"media-bytes")
+    target = tmp_path / "originals" / "t1.ts"
+
+    with patch.object(Path, "replace", side_effect=OSError(18, "Invalid cross-device link")):
+        result = chunk_store.move_merged_to_original(merged, target)
+
+    assert result == target
+    assert target.read_bytes() == b"media-bytes"
+    assert not merged.exists()
+
+
+def test_move_merged_to_original_reports_failure_when_copy_also_fails(tmp_path):
+    """转存彻底失败必须抛 UploadError：副本是探测的唯一本地输入，不能静默放过。"""
+    merged = tmp_path / "assembling" / "u1.part"
+    merged.parent.mkdir(parents=True)
+    merged.write_bytes(b"media-bytes")
+    target = tmp_path / "originals" / "t1.ts"
+
+    with patch.object(Path, "replace", side_effect=OSError(18, "cross-device")):
+        with patch("app.chunks.shutil.copy2", side_effect=OSError(28, "No space left on device")):
+            with pytest.raises(chunk_store.UploadError):
+                chunk_store.move_merged_to_original(merged, target)
+
+
 def test_concurrent_chunk_uploads_keep_all_bytes(client, media_root):
     """并发上传分片：同一会话下多片并行写入不丢片、不串号。"""
     from app.main import app
@@ -434,6 +478,38 @@ def test_requeue_pending_picks_up_uploaded_tasks(db_session_factory, monkeypatch
 
     assert requeue_pending() == 1
     assert submitted == ["t4"]
+
+
+def test_requeue_pending_reclaims_tasks_stuck_in_processing(db_session_factory, monkeypatch):
+    """进程被杀后停在 processing 的任务也必须被重新入队，否则永远卡住。
+
+    认领凭据（process_token）是内存态的，重启后一定失效，因此这类任务必须重置而不是跳过。
+    """
+    from app.models import Task
+    from app.tasks import STATUS_PROCESSING, STATUS_UPLOADED, executor, requeue_pending
+
+    db = db_session_factory()
+    try:
+        db.add(Task(id="t6", kind="ingest", status=STATUS_PROCESSING, progress=20, process_token="tok"))
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(executor, "SessionLocal", db_session_factory)
+    submitted: list[str] = []
+    monkeypatch.setattr(executor, "submit", submitted.append)
+
+    assert requeue_pending() == 1
+    assert submitted == ["t6"]
+
+    db = db_session_factory()
+    try:
+        task = db.get(Task, "t6")
+        assert task.status == STATUS_UPLOADED
+        assert task.process_token is None
+        assert task.progress == 0
+    finally:
+        db.close()
 
 
 # —— 删除视频（v0.1.3.1）——

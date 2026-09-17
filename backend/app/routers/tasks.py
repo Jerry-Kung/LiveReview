@@ -11,7 +11,7 @@ from app.config import Settings, get_settings
 from app.database import get_db
 from app.deletion import delete_task_assets
 from app.models import Task
-from app.schemas import TaskListResponse, TaskResponse
+from app.schemas import TaskListResponse, TaskMetadataResponse, TaskResponse
 from app.storage import StorageError, describe_error
 from app.tasks import (
     STATUS_FAILED,
@@ -40,8 +40,30 @@ def _to_response(task: Task) -> TaskResponse:
         object_key=task.object_key,
         size=task.size,
         error=task.error,
+        metadata=_to_metadata(task),
         created_at=task.created_at,
         updated_at=task.updated_at,
+    )
+
+
+def _to_metadata(task: Task) -> TaskMetadataResponse | None:
+    """探测结果只在真正探测成功过时返回：避免把「未探测」渲染成一份空元数据。"""
+    if not task.has_metadata:
+        return None
+    return TaskMetadataResponse(
+        format_name=task.media_format,
+        duration_seconds=task.duration_seconds,
+        video_codec=task.video_codec,
+        width=task.width,
+        height=task.height,
+        frame_rate=task.frame_rate,
+        audio_codec=task.audio_codec,
+        sample_rate=task.sample_rate,
+        channels=task.channels,
+        stream_count=task.stream_count,
+        bit_rate=task.media_bit_rate,
+        content_hash=task.content_hash,
+        probed_at=task.probed_at,
     )
 
 

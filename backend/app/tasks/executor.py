@@ -11,7 +11,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from app.database import SessionLocal
-from app.tasks.runner import STATUS_UPLOADED, list_tasks, run_task
+from app.tasks.runner import STATUS_UPLOADED, list_tasks, reclaim_stale_processing, run_task
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +65,20 @@ def submit(task_id: str) -> None:
 
 
 def requeue_pending() -> int:
-    """启动时把 `uploaded` 状态的任务重新入队，覆盖进程重启丢任务的场景。"""
+    """启动时把 `uploaded` 状态的任务重新入队，覆盖进程重启丢任务的场景。
+
+    先把残留的 `processing` 退回 `uploaded`：进程重启后原认领凭据已失效，这类任务若不
+    重置，既不会被重新入队也永远不会推进。
+    """
     db = SessionLocal()
     try:
+        reclaimed = reclaim_stale_processing(db)
         pending = [task.id for task in list_tasks(db, limit=100) if task.status == STATUS_UPLOADED]
     finally:
         db.close()
 
+    if reclaimed:
+        logger.info("启动时重置 %d 个中断的处理中任务", reclaimed)
     for task_id in pending:
         submit(task_id)
     if pending:

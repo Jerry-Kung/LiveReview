@@ -114,6 +114,24 @@ def cleanup_merged(media_root: str | Path, upload_id: str) -> None:
     _remove(merged_path(media_root, upload_id))
 
 
+def move_merged_to_original(merged: Path, target: Path) -> Path:
+    """把合并产物转存为「待探测的本地副本」，返回目标路径。
+
+    迁移失败视为上传失败：副本是后续探测的唯一本地输入，留着一份没人认领的合并临时文件
+    只会掩盖问题。跨设备场景下 `Path.replace` 不可用，退化为「复制后删源」。
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        merged.replace(target)
+    except OSError:
+        try:
+            shutil.copy2(merged, target)
+        except OSError as exc:
+            raise UploadError(f"合并产物转存为本地副本失败：{exc}") from exc
+        _remove(merged)
+    return target
+
+
 def cleanup(media_root: str | Path, upload_id: str) -> None:
     """删除分片目录与合并临时文件：对象已在存储中就位后才可调用。"""
     _remove(chunks_dir(media_root, upload_id))

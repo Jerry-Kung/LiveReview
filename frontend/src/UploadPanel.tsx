@@ -17,6 +17,7 @@ import {
   sliceFile,
   uploadChunk,
   type Task,
+  type TaskMetadata,
 } from "./api";
 
 const CONCURRENCY = 4;
@@ -68,6 +69,54 @@ export function formatBytes(bytes: number): string {
 export function describeTask(task: Task): string {
   const label = TASK_LABELS[task.status] ?? task.status;
   return task.progress > 0 && task.status === "processing" ? `${label} ${task.progress}%` : label;
+}
+
+/** 元数据占位：拿不到就是「—」，不臆造取值。 */
+const PLACEHOLDER = "—";
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return PLACEHOLDER;
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
+}
+
+function formatResolution(width: number | null, height: number | null): string {
+  return width !== null && height !== null ? `${width}×${height}` : PLACEHOLDER;
+}
+
+function formatAudio(metadata: TaskMetadata): string {
+  const channelText =
+    metadata.channels === 1 ? "单声道" : metadata.channels === 2 ? "立体声" : metadata.channels ? `${metadata.channels} 声道` : PLACEHOLDER;
+  const rate =
+    metadata.sample_rate !== null ? `${(metadata.sample_rate / 1000).toFixed(1)} kHz` : PLACEHOLDER;
+  return `${metadata.audio_codec ?? PLACEHOLDER} · ${rate} · ${channelText}`;
+}
+
+/** 探测结论：让用户能核对「后端拿到的到底是什么媒体」，字段缺失显示占位。 */
+function MetadataSummary({ metadata }: { metadata: TaskMetadata }) {
+  const entries: Array<[string, string]> = [
+    ["时长", formatDuration(metadata.duration_seconds)],
+    ["分辨率", formatResolution(metadata.width, metadata.height)],
+    ["帧率", metadata.frame_rate ?? PLACEHOLDER],
+    ["视频编码", metadata.video_codec ?? PLACEHOLDER],
+    ["音频", formatAudio(metadata)],
+    ["容器", metadata.format_name ?? PLACEHOLDER],
+  ];
+
+  return (
+    <dl className="metadata" aria-label="媒体信息">
+      {entries.map(([label, value]) => (
+        <div className="metadata-item" key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
 /** 任务状态对应的语义标记：只有成功是健康态，其余都需留意。 */
@@ -247,6 +296,7 @@ export default function UploadPanel() {
             {`任务：${describeTask(task)}`}
           </p>
           {task.object_key && <p className="hint">对象键：{task.object_key}</p>}
+          {task.metadata && <MetadataSummary metadata={task.metadata} />}
           {task.error && <p className="detail-error">失败原因：{task.error}</p>}
           {!task.error && state.error && <p className="detail-error">{state.error}</p>}
           <div className="actions">
