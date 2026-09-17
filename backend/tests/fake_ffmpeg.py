@@ -6,8 +6,9 @@
 行为约定：
 - 解析 `-i <源>` 与输出文件（最后一个参数），生成一段「与请求时长成正比」的假内容，
   使测试可以通过参数控制产物体积（`LIVERREVIEW_FAKE_FFMPEG_BYTES_PER_SECOND`）。
-- 请求时长由输入输出的 `-ss` / `-to` 推得：转封装时从源文件读取（源文件里写有原始时长，
-  见 `fake_ffprobe` 的约定），切片时由 `-ss` 与 `-to` 之差决定。
+- 请求时长由输入输出的 `-ss` / `-t` / `-to` 推得：转封装时从源文件读取（源文件里写有原始
+  时长，见 `fake_ffprobe` 的约定），切片时由 `-t` 决定；`-to` 仍按输入时间轴的绝对时刻
+  参与计算，以便替身能如实暴露「用 `-to` 限定切片长度」这类误用。
 - 设置 `LIVERREVIEW_FAKE_FFMPEG_MODE` 改变行为：
   - `fail`：以退出码 1 失败，stderr 输出可识别的错误文本；
   - `timeout`：睡眠 30 秒，用于触发超时；
@@ -41,11 +42,11 @@ SIDECAR_SUFFIX = ".fakemeta.json"
 # 替身若对参数顺序照单全收，`-map` 写到 `-i` 之前这种错误在本地测试里就查不出来，
 # 只能等真实 ffmpeg 在测试环境报错（V0.1.5 正是这样暴露的）。
 GLOBAL_OPTIONS = frozenset({"-hide_banner", "-nostdin", "-v", "-loglevel", "-y", "-n"})
-# `-ss` 与 `-to` 两侧都合法（含义不同），因此不参与位置校验：替身只拦真正会失败的错位
+# `-ss`、`-t`、`-to` 两侧都合法（含义不同），因此不参与位置校验：替身只拦真正会失败的错位
 INPUT_OPTIONS = frozenset({"-fflags", "-f", "-probesize", "-analyzeduration"})
 OUTPUT_OPTIONS = frozenset({"-map", "-c", "-codec", "-movflags", "-avoid_negative_ts", "-an", "-vn"})
 # 带参数值的选项：解析时需连同其取值一起跳过
-OPTIONS_WITH_VALUE = GLOBAL_OPTIONS | INPUT_OPTIONS | OUTPUT_OPTIONS | {"-ss", "-to"}
+OPTIONS_WITH_VALUE = GLOBAL_OPTIONS | INPUT_OPTIONS | OUTPUT_OPTIONS | {"-ss", "-t", "-to"}
 
 
 def _validate_option_placement(args: list[str]) -> str | None:
@@ -75,7 +76,14 @@ def _validate_option_placement(args: list[str]) -> str | None:
 
 
 def _parse_args(args: list[str]) -> dict:
-    info: dict = {"args": args, "source": None, "output": None, "ss": None, "to": None}
+    info: dict = {
+        "args": args,
+        "source": None,
+        "output": None,
+        "ss": None,
+        "t": None,
+        "to": None,
+    }
     index = 0
     while index < len(args):
         token = args[index]
@@ -85,6 +93,10 @@ def _parse_args(args: list[str]) -> dict:
             continue
         if token == "-ss" and index + 1 < len(args):
             info["ss"] = float(args[index + 1])
+            index += 2
+            continue
+        if token == "-t" and index + 1 < len(args):
+            info["t"] = float(args[index + 1])
             index += 2
             continue
         if token == "-to" and index + 1 < len(args):
@@ -117,9 +129,16 @@ def _source_duration(source: str | None) -> float:
 
 
 def _product_duration(info: dict) -> float:
-    """产物时长：切片看 -ss/-to 之差，转封装看源文件的时长。"""
-    if info["ss"] is not None and info["to"] is not None:
-        return max(0.1, float(info["to"]) - float(info["ss"]))
+    """产物时长：切片看 `-t`（`-to` 按输入时间轴绝对时刻参与比较），转封装看源文件时长。
+
+    `-to` 的语义与真实 ffmpeg 一致：它是**输入时间轴上的绝对时刻**，不随输入侧 `-ss`
+    平移。因此只写 `-to`、不写 `-t` 时，产出的长度是「end - 实际起点」，越靠后的片段
+    超出越多——替身如实算出这个长度，这类误用才可能被本地测试发现。
+    """
+    if info["t"] is not None:
+        return max(0.1, float(info["t"]))
+    if info["to"] is not None:
+        return max(0.1, float(info["to"]) - float(info["ss"] or 0.0))
     return _source_duration(info["source"])
 
 

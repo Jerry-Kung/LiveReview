@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -135,15 +136,31 @@ def test_remux_put_audio_and_mapping_after_the_input_file():
 
 def test_clip_args_cut_by_time_and_keep_audio():
     args = ClipPlan(index=2, start_seconds=120.5, end_seconds=300.0).to_args()
-    assert args[args.index("-to") + 1] == "300.000"
+    assert args[args.index("-t") + 1] == "179.500"
     # 保留全部音视频流，且不重编码
     assert "0:v" in args and "0:a?" in args
     assert args[args.index("-c") + 1] == "copy"
     assert CLIP_ARGS_TEMPLATE.count("{start}") == 0
 
 
+def test_clip_length_is_given_as_duration_not_end_timestamp():
+    """回归用例：输出侧的 `-to` 是输入时间轴上的绝对时刻，不随输入侧 `-ss` 平移。
+
+    用它限定切片长度时，第 N 片（计划区间 [a, b)）会退化成「从 a 一直复制到第 b 秒」，
+    越靠后的片段超出越多。测试环境据此复现：第 1 片计划 1351.6s、实际 2703.7s。
+    """
+    planned = ClipPlan(index=1, start_seconds=120.5, end_seconds=300.0)
+    args = planned.to_args()
+
+    # 输出侧只出现时长（179.500），既不出现结束时刻，也不出现起点
+    assert "-to" not in args
+    assert args[args.index("-t") + 1] == "179.500"
+    assert "300.000" not in args
+    assert "120.500" not in args
+
+
 def test_clip_seek_goes_before_input_and_stop_after_input():
-    """`-ss` 放输入侧是快速定位，`-to`/流映射属输出侧；错位会让切分直接失败。"""
+    """`-ss` 放输入侧是快速定位，时长与流映射属输出侧；错位会让切分直接失败。"""
     planned = ClipPlan(index=2, start_seconds=120.5, end_seconds=300.0)
     args = build_ffmpeg_args(
         "ffmpeg",
@@ -154,9 +171,9 @@ def test_clip_seek_goes_before_input_and_stop_after_input():
     )
     assert args.index("-ss") < args.index("-i")
     assert args[args.index("-ss") + 1] == "120.500"
-    assert args.index("-i") < args.index("-to")
-    assert args[args.index("-to") + 1] == "300.000"
-    assert CLIP_INPUT_ARGS_TEMPLATE.count("{end}") == 0
+    assert args.index("-i") < args.index("-t")
+    assert args[args.index("-t") + 1] == "179.500"
+    assert CLIP_INPUT_ARGS_TEMPLATE.count("{duration}") == 0
     assert CLIP_ARGS_TEMPLATE.count("{start}") == 0
 
 
@@ -284,6 +301,26 @@ def test_fake_ffmpeg_rejects_input_option_after_input(source: Path, tmp_path: Pa
             output=tmp_path / "out.mp4",
             extra_args=("-fflags", "+genpts"),
         )
+
+
+def test_fake_ffmpeg_mirrors_end_timestamp_semantics(source: Path, tmp_path: Path):
+    """替身必须如实复刻 `-to` 的语义，否则「用 -to 限定切片长度」在本地查不出来。
+
+    回归用例：`-to` 是输入时间轴上的绝对时刻，输入侧 `-ss 1351.672` 并不会把它平移，
+    于是计划 1351.7s 的片段会切出 2703.3s（测试环境实测 2703.7s）。
+    """
+    output = tmp_path / "clip_001.mp4"
+    run_ffmpeg(
+        fake_ffmpeg_args(),
+        source=source,
+        output=output,
+        input_args=("-ss", "1351.672"),
+        extra_args=("-to", "2703.344"),
+    )
+    payload = json.loads(
+        Path(f"{output}{SIDECAR_SUFFIX}").read_text(encoding="utf-8")
+    )
+    assert payload["duration_seconds"] == pytest.approx(1351.672, abs=0.01)
 
 
 def test_run_ffmpeg_times_out(source: Path, tmp_path: Path, monkeypatch):

@@ -156,11 +156,16 @@ def test_clip_cut_args_keep_audio_and_copy_streams(client, ffmpeg_log):
 
     clip_calls = [call for call in calls if call["ss"] is not None]
     assert clip_calls, "没有记录到切片调用"
+    total_duration = _task(client, data["task_id"])["coverage"]["source_duration_seconds"]
     for call in clip_calls:
         args = call["args"]
         assert "0:v" in args and "0:a?" in args
         assert args[args.index("-c") + 1] == "copy"
-        assert call["to"] > call["ss"]
+        # 长度用 -t 给出：-to 是输入时间轴的绝对时刻，用它限定长度会让靠后的片段越切越长
+        assert call["to"] is None
+        assert call["t"] > 0
+    # 片段时长之和应覆盖整场（-c copy 的切点落在关键帧，允许单片的少量溢出）
+    assert sum(call["t"] for call in clip_calls) >= total_duration - 1.0
 
 
 def test_local_products_are_cleaned_after_success(client, media_root):
