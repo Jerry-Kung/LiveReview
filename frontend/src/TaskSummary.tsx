@@ -7,6 +7,7 @@
 
 import type { Task, TaskMetadata } from "./api";
 import ClipTable from "./ClipTable";
+import UnderstandingBlock, { type UnderstandingActions } from "./Understanding";
 import {
   PLACEHOLDER,
   describeTask,
@@ -101,15 +102,21 @@ export type TaskActions = {
 export default function TaskSummary({
   task,
   actions,
+  understanding,
+  refreshKey = 0,
   notice = null,
 }: {
   task: Task;
   actions: TaskActions;
+  /** 识别相关操作：切分未完成的任务也能看到识别块，只是按钮不可用。 */
+  understanding: UnderstandingActions;
+  /** 识别状态变化时递增，用于让全文面板重新拉取。 */
+  refreshKey?: number;
   /** 操作层面的失败（如删除未成功）：与任务自身的失败原因分开呈现。 */
   notice?: string | null;
 }) {
   const coverage = task.coverage;
-  const clips = task.clips;
+  const clips = task.clips ?? [];
   const issues = coverage?.issues ?? [];
 
   return (
@@ -168,6 +175,9 @@ export default function TaskSummary({
           {clips.length > 0 && <ClipTable clips={clips} coverage={coverage} />}
         </section>
       )}
+
+      {/* 识别块在切分未完成时也出现：让用户看到「下一步要做什么」以及为什么还不能做 */}
+      <UnderstandingBlock task={task} actions={understanding} refreshKey={refreshKey} />
 
       {task.error && <p className="detail-error">失败原因：{task.error}</p>}
       {notice && <p className="detail-error">{notice}</p>}

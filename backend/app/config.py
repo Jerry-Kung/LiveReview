@@ -4,6 +4,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.llm.base import LLMConfig
 from app.storage.base import StorageConfig
 
 
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.1.6"
+    app_version: str = "0.2.0"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -62,6 +63,23 @@ class Settings(BaseSettings):
     # ffmpeg stderr 收集上限（字节）：失败原因要能入库，但不该塞进整段日志
     ffmpeg_max_output_bytes: int = 8 * 1024 * 1024
 
+    # 模型接入（V0.2）：base_url / api_key / model_name 三项必填，只从环境变量读取
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model_name: str | None = None
+    # 单次视频理解请求的超时（秒）：几分钟级的任务，默认 900s，可按素材长度上调
+    llm_timeout_seconds: int = 900
+    # 送模型的采样帧率：1fps 是示例代码的取值，兼顾画面变化与请求体积
+    llm_fps: float = 1.0
+    # 单片识别的最大尝试次数（含首次）：瞬时故障退避重试，超出即判该片失败
+    llm_max_attempts: int = 3
+    # 片段识别的并发数：模型侧限流与配额未知，默认串行，确认配额后再上调
+    llm_concurrency: int = 1
+    # 预签名视频 URL 的有效期（秒）：须覆盖「排队等待 + 单次识别」的耗时
+    llm_clip_url_ttl_seconds: int = 7200
+    # 识别任务的提示词：留空使用默认题面（识别片段中的所有人声语音）
+    llm_understanding_prompt: str | None = None
+
     @property
     def storage_missing_fields(self) -> list[str]:
         """列出缺失的存储必填项名称；只返回名称，不回显任何取值。"""
@@ -88,6 +106,31 @@ class Settings(BaseSettings):
             secret_key=self.tos_secret_key or "",
             object_prefix=self.tos_object_prefix,
             presigned_ttl_seconds=self.tos_presigned_ttl_seconds,
+        )
+
+    @property
+    def llm_missing_fields(self) -> list[str]:
+        """列出缺失的模型必填项名称；只返回名称，不回显任何取值。"""
+        required = {
+            "LLM_BASE_URL": self.llm_base_url,
+            "LLM_API_KEY": self.llm_api_key,
+            "LLM_MODEL_NAME": self.llm_model_name,
+        }
+        return [name for name, value in required.items() if not (value or "").strip()]
+
+    @property
+    def llm_configured(self) -> bool:
+        return not self.llm_missing_fields
+
+    def llm_config(self) -> LLMConfig:
+        """转换为模型接入模块的配置对象（调用方需先确认 llm_configured）。"""
+        return LLMConfig(
+            base_url=self.llm_base_url or "",
+            api_key=self.llm_api_key or "",
+            model_name=self.llm_model_name or "",
+            timeout_seconds=self.llm_timeout_seconds,
+            fps=self.llm_fps,
+            max_attempts=self.llm_max_attempts,
         )
 
 

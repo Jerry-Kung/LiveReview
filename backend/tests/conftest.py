@@ -12,8 +12,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.llm import use_client
 from app.models import Base
 from app.storage import InMemoryStorage, StorageConfig
+from tests.fake_llm import FakeUnderstandingClient
 
 CHUNK_SIZE = 1024 * 1024
 FILE_SIZE = 3 * CHUNK_SIZE  # 3 片，便于构造缺片与乱序场景
@@ -56,12 +58,18 @@ def media_root(tmp_path: Path) -> Path:
 def test_settings(media_root: Path) -> Settings:
     # _env_file=None：不读本机 .env，避免本地凭据影响测试结果
     # ffprobe/ffmpeg 指向假实现：本机不部署 FFmpeg，但处理链路仍需被完整覆盖
+    # 模型配置给一组假值：识别链路的编排无需真实凭据即可覆盖
     return Settings(
         _env_file=None,
         media_root=str(media_root),
         upload_chunk_size=CHUNK_SIZE,
         ffprobe_path=fake_ffprobe_args(),
         ffmpeg_path=fake_ffmpeg_args(),
+        llm_base_url="https://llm.test/api/v3",
+        llm_api_key="test-api-key",
+        llm_model_name="test-model",
+        llm_timeout_seconds=30,
+        llm_max_attempts=2,
     )
 
 
@@ -84,16 +92,19 @@ class _SyncExecutor:
 
     与线程池一致地吞掉任务体的异常（失败原因已落库），但不吞 `HTTPException`：
     入口函数自身抛出的 HTTP 错误必须照常返回给测试。
+
+    `submit` 接受与真实执行器相同的 `(task_id, phase)` 参数，使识别阶段的入队同样
+    在本进程内同步完成。
     """
 
-    def submit(self, fn, task_id: str):
+    def submit(self, fn, task_id: str, phase: str = "ingest"):
         from concurrent.futures import Future
 
         from fastapi import HTTPException
 
         future: Future = Future()
         try:
-            fn(task_id)
+            fn(task_id, phase)
         except HTTPException:
             raise
         except BaseException as exc:  # noqa: BLE001 —— 与线程池一致：异常不向调用方抛出
@@ -131,6 +142,13 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
     monkeypatch.setattr("app.tasks.executor.SessionLocal", db_session_factory)
     # 任务体不走依赖注入，直接取配置单例；测试里指向假 ffprobe，避免依赖本机安装 FFmpeg
     monkeypatch.setattr("app.tasks.runner.get_settings", lambda: test_settings)
+    # 识别链路的配置与存储同样走单例；存储已替换为 Mock，配置指向测试配置
+    monkeypatch.setattr("app.tasks.understanding.get_settings", lambda: test_settings)
+    monkeypatch.setattr("app.tasks.understanding.get_storage", lambda: storage)
+    # 识别客户端默认替换为假实现，绝不发真实网络请求；单测内可再替换成自己的实例
+    monkeypatch.setattr(
+        "app.tasks.understanding.get_understanding_client", lambda: FakeUnderstandingClient()
+    )
 
     with TestClient(app) as test_client:
         yield test_client

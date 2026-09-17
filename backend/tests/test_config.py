@@ -88,8 +88,8 @@ def test_storage_config_maps_settings(monkeypatch):
     assert config.access_key == "ak"
 
 
-def test_app_version_is_0_1_5():
-    assert Settings(_env_file=None).app_version == "0.1.6"
+def test_app_version_matches_current_release():
+    assert Settings(_env_file=None).app_version == "0.2.0"
 
 
 def test_upload_and_media_defaults():

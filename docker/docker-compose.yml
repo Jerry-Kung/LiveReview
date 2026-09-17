@@ -18,6 +18,9 @@ services:
       MEDIA_ROOT: /app/media
       # 测试环境强制真实存储：缺凭据时明确失败，不静默回落到本地 Mock
       STORAGE_BACKEND: tos
+      # 模型配置（V0.2）从 backend/.env 注入，与 TOS 凭据同一处；这里只固定并发，
+      # 使测试环境的模型调用节奏不随本地 .env 漂移
+      LLM_CONCURRENCY: "1"
     volumes:
       - liverreview-media:/app/media
       - liverreview-data:/app/data

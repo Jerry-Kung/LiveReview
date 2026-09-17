@@ -44,4 +44,8 @@ def health() -> dict:
         "database": "ok" if db_ok else "degraded",
         "storage": storage_state,
         "storage_missing": storage_missing,
+        # 模型配置（V0.2）：只回显状态与缺失项名称，不回显 base_url 与 api_key。
+        # 缺模型配置不算服务降级——切分链路不依赖模型，只是识别不可用。
+        "llm": "configured" if settings.llm_configured else "not_configured",
+        "llm_missing": settings.llm_missing_fields,
     }

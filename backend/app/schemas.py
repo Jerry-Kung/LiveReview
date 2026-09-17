@@ -91,6 +91,83 @@ class TaskClipResponse(BaseModel):
     error: str | None = None
     object_key: str | None = None
     download_url: str | None = None
+    # 识别结果（V0.2）：`understanding_status` 与 `understanding_at` 区分「识别出空内容」
+    # 与「还没识别过」；`understanding_error` 是单片失败原因，供逐片重试的判断依据。
+    understanding_status: str = "pending"
+    understanding_segment_count: int = 0
+    understanding_error: str | None = None
+    understanding_attempts: int = 0
+    understanding_at: datetime | None = None
+    understanding_warnings: list[str] = Field(default_factory=list)
+
+
+class TaskUnderstandingResponse(BaseModel):
+    """整场识别结论（V0.2）：任务级状态、覆盖情况与耗时。
+
+    `status` 为 `skipped` 时表示本次没有可识别的输入（切片尚未全部就绪）；`finished_at`
+    非空才说明跑过一轮，与片段级字段的取值方式一致。
+    """
+
+    status: str
+    progress: int
+    clip_count: int
+    segment_count: int
+    failed_clip_count: int
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    model_name: str | None = None
+
+
+class TranscriptSegmentResponse(BaseModel):
+    """一条语音记录：时间为**原视频时间轴上的绝对秒数**。
+
+    `clip_start_seconds` / `clip_end_seconds` 是片段内的相对时间，保留下来用于对照原始
+    模型输出定位偏差。`out_of_range` 为真表示模型给出的时间超出片段本身，本系统只标记、
+    不裁切——这类记录需要在人工核查时单独看。
+    """
+
+    index: int
+    clip_index: int
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    content: str
+    clip_start_seconds: float
+    clip_end_seconds: float
+    out_of_range: bool = False
+
+
+class TranscriptClipResponse(BaseModel):
+    """一个片段在识别链路里的状态与条目数；失败片段也出现在这里。"""
+
+    index: int
+    start_seconds: float
+    end_seconds: float
+    status: str
+    segment_count: int
+    error: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TranscriptResponse(BaseModel):
+    """整场语音记录：片段级状态 + 按时间顺序拼好的全文。
+
+    `text` 由后端拼装而不是前端逐片拼接：全文是「识别结果汇总」这一对外产物，只在一处
+    生成才能保证导出、复制与页面看到的是同一份内容。
+    """
+
+    task_id: str
+    filename: str | None = None
+    status: str
+    clip_count: int
+    succeeded_clip_count: int
+    failed_clip_count: int
+    segment_count: int
+    model_name: str | None = None
+    clips: list[TranscriptClipResponse] = Field(default_factory=list)
+    segments: list[TranscriptSegmentResponse] = Field(default_factory=list)
+    text: str
 
 
 class CoverageIssueResponse(BaseModel):
@@ -124,6 +201,7 @@ class TaskResponse(BaseModel):
     error: str | None = None
     metadata: TaskMetadataResponse | None = None
     coverage: TaskCoverageResponse | None = None
+    understanding: TaskUnderstandingResponse | None = None
     clips: list[TaskClipResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

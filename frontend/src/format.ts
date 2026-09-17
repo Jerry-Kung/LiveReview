@@ -24,6 +24,21 @@ export const CLIP_STATUS_LABELS: Record<string, string> = {
   failed: "失败",
 };
 
+/** 片段识别状态：与切片状态分开，因为一个片段可能已上传但还没识别。 */
+export const UNDERSTANDING_STATUS_LABELS: Record<string, string> = {
+  pending: "未识别",
+  running: "识别中",
+  succeeded: "已识别",
+  failed: "识别失败",
+  // 任务级专有：切片尚未全部就绪，本次没有可识别的输入
+  skipped: "未开始",
+};
+
+export function understandingStatusLabel(status: string | null): string {
+  if (status === null) return "未开始";
+  return UNDERSTANDING_STATUS_LABELS[status] ?? status;
+}
+
 export function taskStatusLabel(status: string): string {
   return TASK_LABELS[status] ?? status;
 }
@@ -75,4 +90,32 @@ export function formatClipRange(start: number, end: number): string {
 /** 片段序号：补零使列表读起来有明确的先后次序。 */
 export function clipNumber(index: number): string {
   return String(index + 1).padStart(2, "0");
+}
+
+/**
+ * 语音记录的精确时间码：带毫秒。
+ *
+ * 与 `formatDuration` 的分工是刻意的——时长用整秒便于扫读，而识别记录的时间戳是
+ * 用来回看定位的坐标，毫秒位在核查「这句话到底在几分几秒」时有用。
+ */
+export function formatTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds)) return PLACEHOLDER;
+  const sign = seconds < 0 ? "-" : "";
+  const value = Math.abs(seconds);
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const whole = Math.floor(value % 60);
+  const millis = Math.round((value - Math.floor(value)) * 1000);
+  const pad = (input: number, width: number) => String(input).padStart(width, "0");
+  const base = `${pad(hours, 2)}:${pad(minutes, 2)}:${pad(whole, 2)}.${pad(millis, 3)}`;
+  return `${sign}${base}`;
+}
+
+/** 识别结果的完成时刻：只显示到分钟，用来判断「这份结果是不是刚才跑的」。 */
+export function formatMoment(value: string | null): string {
+  if (!value) return PLACEHOLDER;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return PLACEHOLDER;
+  const pad = (input: number) => String(input).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }

@@ -11,7 +11,7 @@ def test_health_returns_ok():
     data = resp.json()
     assert data["status"] in ("ok", "degraded")
     assert data["service"] == "LiveReview"
-    assert data["version"] == "0.1.6"
+    assert data["version"] == "0.2.0"
     assert data["environment"] == "development"
     assert data["database"] in ("ok", "degraded")
     assert data["storage"] in ("configured", "not_configured", "unavailable")
@@ -52,10 +52,13 @@ def test_health_reports_storage_configured(monkeypatch):
 
     class FakeSettings:
         app_name = "LiveReview"
-        app_version = "0.1.6"
+        app_version = "0.2.0"
         app_env = "development"
         storage_configured = True
         storage_missing_fields: list[str] = []
+        # 健康检查自 V0.2 起也回显模型配置状态，桩对象需要给出这两个属性
+        llm_configured = True
+        llm_missing_fields: list[str] = []
 
     monkeypatch.setattr(health_module, "get_settings", lambda: FakeSettings())
     # FakeSettings 是精简桩对象，不具备真实 build_storage 所需的 storage_backend 等属性，
@@ -74,10 +77,13 @@ def test_health_reports_storage_unavailable_when_build_fails(monkeypatch):
 
     class FakeSettings:
         app_name = "LiveReview"
-        app_version = "0.1.6"
+        app_version = "0.2.0"
         app_env = "development"
         storage_configured = True
         storage_missing_fields: list[str] = []
+        # 健康检查自 V0.2 起也回显模型配置状态，桩对象需要给出这两个属性
+        llm_configured = True
+        llm_missing_fields: list[str] = []
 
     def boom(_settings):
         raise StorageClientError("未安装 TOS SDK")
@@ -108,3 +114,28 @@ def test_health_reports_database_degraded(monkeypatch):
     assert data["status"] == "degraded"
     assert data["database"] == "degraded"
     assert data["storage"] == "not_configured"  # 未配置不影响整体状态
+
+
+def test_health_reports_llm_not_configured(monkeypatch):
+    """模型未配置时在健康检查里明确标出缺失项名称，不泄露取值本身。
+
+    缺模型配置不算服务降级：切分链路不依赖模型，服务整体仍是 ok。
+    """
+    from app.routers import health as health_module
+
+    class FakeSettings:
+        app_name = "LiveReview"
+        app_version = "0.2.0"
+        app_env = "development"
+        storage_configured = True
+        storage_missing_fields: list[str] = []
+        llm_configured = False
+        llm_missing_fields = ["LLM_API_KEY"]
+
+    monkeypatch.setattr(health_module, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(health_module, "build_storage", lambda _settings: object())
+
+    data = client.get("/health").json()
+    assert data["llm"] == "not_configured"
+    assert data["llm_missing"] == ["LLM_API_KEY"]
+    assert data["status"] == "ok"

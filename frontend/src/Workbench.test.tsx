@@ -521,7 +521,8 @@ describe("切分结果展示", () => {
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
-    const table = screen.getByRole("table");
+    // 页面自 V0.2 起有两张表（切片与识别明细），这里精确定位切片表
+    const table = document.querySelector(".clips--split") as HTMLTableElement;
     const rows = Array.from(table.querySelectorAll("tbody tr"));
     expect(rows).toHaveLength(2);
     // 序号从 1 起按时间顺序递增，区间与时间轴一致
@@ -545,7 +546,7 @@ describe("切分结果展示", () => {
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
-    const table = screen.getByRole("table");
+    const table = document.querySelector(".clips--split") as HTMLTableElement;
     // 撤销切片回看：既没有下载/播放链接，也没有 video 元素
     expect(table.querySelectorAll("a")).toHaveLength(0);
     expect(document.querySelector("video")).toBeNull();
@@ -696,5 +697,253 @@ describe("工作台壳层", () => {
 
     expect(await screen.findByText("任务列表暂不可用")).toBeInTheDocument();
     expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
+  });
+});
+
+describe("识别结果（V0.2）", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    window.location.hash = "";
+    setPollIntervalMs(10);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    resetPollIntervalMs();
+    vi.restoreAllMocks();
+  });
+
+  const UNDERSTANDING_DONE = {
+    status: "succeeded",
+    progress: 100,
+    clip_count: 1,
+    segment_count: 2,
+    failed_clip_count: 0,
+    error: null,
+    started_at: "2026-01-01T00:20:00Z",
+    finished_at: "2026-01-01T00:26:00Z",
+    model_name: "test-model",
+  };
+
+  const TRANSCRIPT = {
+    task_id: "t1",
+    filename: "live.ts",
+    status: "succeeded",
+    clip_count: 1,
+    succeeded_clip_count: 1,
+    failed_clip_count: 0,
+    segment_count: 2,
+    model_name: "test-model",
+    clips: [
+      { index: 0, start_seconds: 0, end_seconds: 1862.5, status: "succeeded", segment_count: 2, error: null, warnings: [] },
+    ],
+    segments: [
+      {
+        index: 0,
+        clip_index: 0,
+        start_seconds: 0.5,
+        end_seconds: 3.2,
+        duration_seconds: 2.7,
+        content: "欢迎来到直播间",
+        clip_start_seconds: 0.5,
+        clip_end_seconds: 3.2,
+        out_of_range: false,
+      },
+      {
+        index: 1,
+        clip_index: 0,
+        start_seconds: 4,
+        end_seconds: 7.5,
+        duration_seconds: 3.5,
+        content: "今天这款到手价 199 元",
+        clip_start_seconds: 4,
+        clip_end_seconds: 7.5,
+        out_of_range: false,
+      },
+    ],
+    // 全文由后端拼好，前端原样呈现
+    text: "# 语音识别全文：live.ts\n\n── 片段 0（00:00:00.000 - 00:31:02.500），2 条语音\n[00:00:00.500 - 00:00:03.200] 欢迎来到直播间\n",
+  };
+
+  /** 完成任务响应：带一片已识别的切片。 */
+  function identifiedTask() {
+    return {
+      ...taskResponse("succeeded", null, METADATA, COVERAGE, [
+        clipResponse({
+          understanding_status: "succeeded",
+          understanding_segment_count: 2,
+          understanding_attempts: 1,
+          understanding_at: "2026-01-01T00:26:00Z",
+          understanding_warnings: [],
+        }),
+      ]),
+      understanding: UNDERSTANDING_DONE,
+    };
+  }
+
+  it("展示识别汇总，并可按片查看识别状态", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => {
+        if (url === "/api/tasks/t1") return jsonResponse(200, identifiedTask());
+        return undefined;
+      },
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    expect(await screen.findByText(/已识别片段/)).toBeInTheDocument();
+    // 汇总给出「识别了多少」，是判断结果能否使用的前提
+    expect(screen.getByText("2 条")).toBeInTheDocument();
+    expect(screen.getByText("test-model")).toBeInTheDocument();
+
+    const table = document.querySelector(".clips--understanding") as HTMLTableElement;
+    const row = table.querySelector("tbody tr");
+    expect(row?.textContent).toContain("已识别");
+    expect(row?.textContent).toContain("2");
+  });
+
+  it("展开识别全文时拉取并呈现后端拼好的文本", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => {
+        if (url === "/api/tasks/t1") return jsonResponse(200, identifiedTask());
+        if (url === "/api/tasks/t1/transcript") return jsonResponse(200, TRANSCRIPT);
+        return undefined;
+      },
+    ]);
+
+    render(<App />);
+    selectFile();
+    await screen.findByText(/已识别片段/);
+
+    fireEvent.click(screen.getByRole("button", { name: "展开识别全文" }));
+
+    // 全文与逐条记录都来自同一次拉取，两者内容一致
+    expect(await screen.findByText(/语音识别全文：live.ts/)).toBeInTheDocument();
+    expect(screen.getByText("欢迎来到直播间")).toBeInTheDocument();
+    expect(screen.getByText("今天这款到手价 199 元")).toBeInTheDocument();
+    expect(screen.getByText(/共 1 片，已识别 1 片/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载 txt" })).toBeInTheDocument();
+  });
+
+  it("识别失败时给出原因，并允许单独重试该片段", async () => {
+    const failedClip = clipResponse({
+      understanding_status: "failed",
+      understanding_segment_count: 0,
+      understanding_error: "LLMTimeoutError: 识别请求超时（900s）",
+      understanding_attempts: 3,
+      understanding_at: "2026-01-01T00:26:00Z",
+      understanding_warnings: [],
+    });
+    const failedTask = {
+      ...taskResponse("succeeded", null, METADATA, COVERAGE, [failedClip]),
+      understanding: {
+        ...UNDERSTANDING_DONE,
+        status: "failed",
+        clip_count: 0,
+        segment_count: 0,
+        failed_clip_count: 1,
+        error: "1/1 个片段识别失败，首个失败片段 #0：LLMTimeoutError: 识别请求超时（900s）",
+      },
+    };
+    let retried = false;
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url, init) => {
+        if (url === "/api/tasks/t1/clips/0/understanding" && init?.method === "POST") {
+          retried = true;
+          return jsonResponse(200, identifiedTask());
+        }
+        if (url === "/api/tasks/t1") {
+          return jsonResponse(200, retried ? identifiedTask() : failedTask);
+        }
+        return undefined;
+      },
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    // 失败原因整条可见（任务级汇总与片段级各出现一次），而不是只显示一个「失败」标签
+    const reasons = await screen.findAllByText(/识别请求超时/);
+    expect(reasons.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/#0/)).toBeInTheDocument();
+
+    const retryButton = screen.getByRole("button", { name: "重新识别" });
+    fireEvent.click(retryButton);
+
+    // 任务详情会被轮询反复拉取，因此响应用 retried 标记决定内容，而不是按调用次数
+    await waitFor(() => expect(retried).toBe(true));
+
+    await waitFor(() => expect(screen.queryByText(/#0/)).not.toBeInTheDocument());
+    // 「已识别」在汇总与明细里各出现一次，这里断言明细行本身确实变成了已识别
+    const table = document.querySelector(".clips--understanding") as HTMLTableElement;
+    await waitFor(() => expect(table.querySelector("tbody tr")?.textContent).toContain("已识别"));
+  });
+
+  it("尚未识别时不展示全文入口，只给出启动按钮", async () => {
+    const pendingTask = {
+      ...taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse()]),
+      understanding: {
+        status: "pending",
+        progress: 0,
+        clip_count: 0,
+        segment_count: 0,
+        failed_clip_count: 0,
+        error: null,
+        started_at: null,
+        finished_at: null,
+        model_name: "test-model",
+      },
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => (url === "/api/tasks/t1" ? jsonResponse(200, pendingTask) : undefined),
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    expect(await screen.findByRole("button", { name: "开始识别语音" })).toBeInTheDocument();
+    // 「还没识别」与「识别出来是空的」必须区分：没有结果时不提供全文入口
+    expect(screen.queryByRole("button", { name: "展开识别全文" })).not.toBeInTheDocument();
+  });
+
+  it("切片尚未完成时识别按钮不可用并说明原因", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => {
+        if (url === "/api/tasks/t1") return jsonResponse(200, taskResponse("processing"));
+        return undefined;
+      },
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    const button = await screen.findByRole("button", { name: "开始识别语音" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/尚无切片/)).toBeInTheDocument();
   });
 });

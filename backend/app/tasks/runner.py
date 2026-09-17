@@ -12,6 +12,12 @@
 - 转封装把 TS 等容器统一为 MP4，切分只针对 MP4 进行。
 - 片段切出一片即上传一片并删除本地文件，避免 GB 级片段长期占用磁盘。
 - 重试按「产物是否存在」续跑：已上传的片段跳过，转换产物存在则不重复转换。
+
+识别（V0.2）是**独立阶段**，由 `app/tasks/understanding.py` 承接，`submit(..., phase)` 区分：
+它不动任务的 `status`（`uploaded` / `processing` / `succeeded` / `failed` 仍然只描述切分链），
+只写 `understanding_*` 字段。这样「切分成功了但识别失败」「识别要重跑而切分产物不动」
+两件事互不干扰，也让 `requeue_pending` 不必为识别做特殊处理——识别不会被自动重放，
+它要花钱调模型，重启后应当由用户明确再点一次。
 """
 
 from __future__ import annotations
@@ -62,6 +68,9 @@ from app.storage import StorageError, describe_error, get_storage
 logger = logging.getLogger(__name__)
 
 TASK_KIND_INGEST = "ingest"
+# 识别阶段的任务体标识：与任务行的 `kind` 无关（`kind` 仍描述任务来源），
+# 只用于线程池的「同一任务不同阶段」在途去重
+TASK_KIND_UNDERSTAND = "understand"
 
 STATUS_UPLOADING = "uploading"
 STATUS_UPLOADED = "uploaded"

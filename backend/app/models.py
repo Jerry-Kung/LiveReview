@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -33,6 +34,21 @@ class Base(DeclarativeBase):
 CLIP_STATUS_PENDING = "pending"
 CLIP_STATUS_UPLOADED = "uploaded"
 CLIP_STATUS_FAILED = "failed"
+
+# 片段识别状态（V0.2）：`pending` 未识别 / `running` 已发请求 / `succeeded` 有记录 /
+# `failed` 识别失败可单片重试。判定「识别过没有」一律看 `understanding_finished_at`，
+# 与切片状态的处理方式一致。
+UNDERSTANDING_STATUS_PENDING = "pending"
+UNDERSTANDING_STATUS_RUNNING = "running"
+UNDERSTANDING_STATUS_SUCCEEDED = "succeeded"
+UNDERSTANDING_STATUS_FAILED = "failed"
+
+TERMINAL_UNDERSTANDING_STATUSES: frozenset[str] = frozenset(
+    {UNDERSTANDING_STATUS_SUCCEEDED, UNDERSTANDING_STATUS_FAILED}
+)
+
+# 任务级识别状态额外多一个 `skipped`：切片尚未全部就绪时，本次没有任何可识别的输入
+UNDERSTANDING_SKIPPED = "skipped"
 
 
 class UploadSession(Base):
@@ -105,6 +121,26 @@ class Task(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
+    # 识别结果（V0.2）：任务级摘要。逐片的识别记录落在 media_clips 上，
+    # 这里只保留「整场识别进展与用量」，避免同一份数据在两处各存一份。
+    # 这几列都带 server_default：旧库用 `ALTER TABLE ADD COLUMN` 补列时，
+    # 非空列必须有库侧默认值才能加在已有数据的表上（见 `app/database.py`）。
+    understanding_status: Mapped[str] = mapped_column(
+        String(16), default=UNDERSTANDING_STATUS_PENDING, server_default=UNDERSTANDING_STATUS_PENDING
+    )
+    # 识别进度独立于切分进度：任务行已有一次切分进度走到 100，复用它会让两个阶段互相覆盖
+    understanding_progress: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # 成功识别的片段数与产出条目数：供验收核对「整场识别覆盖了多少」
+    understanding_clip_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    understanding_segment_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    understanding_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    understanding_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    understanding_finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     upload: Mapped[UploadSession | None] = relationship(back_populates="task")
     clips: Mapped[list["MediaClip"]] = relationship(
         back_populates="task",
@@ -156,9 +192,39 @@ class MediaClip(Base):
     status: Mapped[str] = mapped_column(String(16), default=CLIP_STATUS_PENDING)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # 识别结果（V0.2）：一条片段对应一份识别记录，重跑覆盖而不是追加历史版本。
+    # 原始返回文本与用量一并留档：「模型到底回了什么」「这次花了多少 token」是验收
+    # 与调参的依据，只留解析后的结果会让解析问题无从复现。
+    # 状态列带 server_default，理由同任务表：旧库补列时非空列必须有库侧默认值。
+    understanding_status: Mapped[str] = mapped_column(
+        String(16), default=UNDERSTANDING_STATUS_PENDING, server_default=UNDERSTANDING_STATUS_PENDING
+    )
+    understanding_segments_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    understanding_raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    understanding_usage_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    understanding_warnings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    understanding_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 实际发出的请求次数：重试是否被触发过，据此可查
+    understanding_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    understanding_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    understanding_finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     task: Mapped[Task] = relationship(back_populates="clips")
 
     @property
     def is_uploaded(self) -> bool:
         """是否已成功落对象存储：重试时据此跳过，不重复上传。"""
         return self.status == CLIP_STATUS_UPLOADED and bool(self.object_key)
+
+    @property
+    def has_understanding(self) -> bool:
+        """是否拿到过识别结果：区分「识别出空内容」与「还没识别」。"""
+        return self.understanding_finished_at is not None
+
+    @property
+    def understanding_succeeded(self) -> bool:
+        return self.understanding_status == UNDERSTANDING_STATUS_SUCCEEDED

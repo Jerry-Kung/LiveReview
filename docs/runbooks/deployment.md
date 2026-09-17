@@ -17,6 +17,7 @@
 - 对象存储通过 `STORAGE_BACKEND` 选择实现：`auto`（默认，凭据齐全用 TOS，否则回落本地 Mock 并记录 warning）、`tos`（强制真实，缺凭据直接报错，测试环境使用）、`mock`（强制本地内存实现）。`TOS_OBJECT_PREFIX` 是对象键的公共前缀（默认 `liverreview/`），`TOS_PRESIGNED_TTL_SECONDS` 是预签名下载链接的默认有效期（秒，默认 3600）。本地未配置 TOS 凭据时不影响启动，存储自动回落 Mock。
 - 上传分片、合并临时文件、原始视频副本与切分中间产物落在 `MEDIA_ROOT`（本地默认 `./media`，容器内 `/app/media`），`UPLOAD_CHUNK_SIZE` 是下发给前端的分片大小（字节，默认 8MB）。该目录不是用户配置项之外的业务数据，清理它只影响未完成的上传与未完成切分的中间产物。
 - 媒体探测（V0.1.4 起）通过 `FFPROBE_PATH`（可执行文件名或「解释器 + 脚本」形式的 JSON 列表）、`PROBE_TIMEOUT_SECONDS`（默认 300 秒）、`PROBE_MAX_OUTPUT_BYTES`（默认 8MB）配置。本地不部署 FFmpeg，因此本地启动只能验证探测的编排与失败原因，真实探测必须在测试环境执行。
+- **模型接入（V0.2 起）**通过 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL_NAME` 三项配置，对接 OpenAI 兼容的 `responses` 接口（当前使用火山引擎方舟的音画理解模型）。**三项都是识别的前置条件**：缺失时切分链路照常工作，但识别接口直接返回 503 并列出缺失项名称，不会逐片各失败一次。`LLM_TIMEOUT_SECONDS`（单次视频理解请求超时，默认 900 秒）是本版最容易低估的一项——分钟级的片段识别在网络与模型排队叠加后会逼近这个值，素材更长或并发更高时应上调。`LLM_FPS`（送模型的采样帧率，默认 1）、`LLM_MAX_ATTEMPTS`（单片最大尝试次数，默认 3）、`LLM_CONCURRENCY`（片段识别并发数，默认 1，串行）、`LLM_CLIP_URL_TTL_SECONDS`（片段预签名视频地址有效期，默认 7200 秒，须覆盖排队与单次识别耗时）、`LLM_UNDERSTANDING_PROMPT`（识别题面，留空使用默认的「识别片段中的所有人声语音」）。
 - 预处理与切分（V0.1.5 起）通过 `FFMPEG_PATH`（形式同 `FFPROBE_PATH`）、`SPLIT_MAX_DURATION_SECONDS`（单片最长时长，默认 3600 秒）、`SPLIT_MAX_CLIP_BYTES`（单片最大体积，默认 `1073741824` 即 1GiB）、`SPLIT_MIN_CLIP_SECONDS`（体积超限时递归对半的下限，默认 1 秒）、`SPLIT_TIMEOUT_SECONDS`（单次转封装/切片调用超时，默认 600 秒）、`FFMPEG_MAX_OUTPUT_BYTES`（ffmpeg stderr 收集上限，默认 8MB）配置。**`SPLIT_MAX_DURATION_SECONDS` 与 `SPLIT_MAX_CLIP_BYTES` 是硬约束**：调小它们会让片段更多、切分更慢，调大则可能超过后续识别环节的输入限制。
 
 ## 3. 本地运行
@@ -209,6 +210,57 @@ docker compose -f docker/docker-compose.yml exec backend python -m app.media.cli
 - **任务失败且原因为「覆盖校验发现 N 处问题」**：片段之间存在缺口、重叠或首尾未覆盖。问题信息里给出了具体的秒数与相邻片段序号；调大 `SPLIT_MAX_DURATION_SECONDS` 减少交界数量常能规避由关键帧对齐引起的边界偏差。
 - **重试会不会重传已有片段**：不会。已成功上传的片段按序号复用、对象键不变，重试只补齐未完成的部分。若调整了切分参数导致片段区间变化，旧片段的对象会被删除并重新切分上传。
 - **对象存储里只有片段、没有转封装产物**：符合预期。转封装产物是容器内的中间态，只有切分后的 MP4 片段会上传到 `clip/` 前缀下。
+
+## 7.2 语音识别（V0.2 起）
+
+切分成功后即可在工作区点击**开始识别语音**，或对历史任务启动识别。后端逐片取预签名视频地址、调用音画理解模型识别片段中的人声语音，把结果按**原视频时间轴**落库（片段内相对时间 + 片段起点）。识别是后台任务：关掉页面不影响执行，回来看历史记录即可。
+
+识别结果有三处可核对：
+
+- 任务接口的 `understanding` 字段是整场汇总（状态、已识别片段数、语音条数、失败片段数与模型名）；
+- `clips[].understanding_status` 是逐片状态与失败原因，失败的那一片可在界面上**单独重新识别**；
+- `GET /api/tasks/{id}/transcript` 是整场语音记录汇总（含按时间排序的条目与拼好的全文），`/transcript.txt` 以 `text/plain` 下载同一份全文。
+
+三条与验收直接相关的语义：
+
+- **已成功的片段不会重复识别**：重复点击「开始识别语音」只为未完成与失败的片段发新请求，不会把同一批片段重新计费一遍。
+- **单片失败不牵连其余片段**：整场状态标为「部分失败」，失败原因写在片段的 `understanding_error` 上（服务端错误带 `request_id`）。
+- **缺口显式可见**：识别失败的片段在全文里留一行括注而不是被跳过；模型返回但被解析丢弃的条目记在片段的 `understanding_warnings` 上。
+
+### 识别自检（测试环境）
+
+```bash
+# 确认模型配置已进入容器（只打印缺失项名称，不回显取值）
+docker compose -f docker/docker-compose.yml exec backend python -c "from app.config import get_settings as g; s=g(); print(s.llm_configured, s.llm_missing_fields)"
+
+# 启动整场识别（后台执行，接口立即返回 202）
+docker compose -f docker/docker-compose.yml exec backend python -c "import urllib.request; print(urllib.request.urlopen(urllib.request.Request('http://localhost:12439/api/tasks/<任务 id>/understanding', data=b'', method='POST')).status)"
+
+# 看逐片识别状态与整场汇总
+docker compose -f docker/docker-compose.yml exec backend python - <<'PY'
+import json, urllib.request
+task = json.load(urllib.request.urlopen("http://localhost:12439/api/tasks/<任务 id>"))
+print("汇总", task["understanding"])
+for clip in task["clips"]:
+    print(clip["index"], clip["understanding_status"], clip["understanding_segment_count"], clip["understanding_error"])
+PY
+
+# 取回整场全文，人工核对识别质量
+docker compose -f docker/docker-compose.yml exec backend python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:12439/api/tasks/<任务 id>/transcript.txt').read().decode('utf-8')[:2000])"
+```
+
+**识别质量必须人工核查**：本版验收要求用包含密集讲解、报价、产品展示与互动的真实片段，逐条比对语音是否遗漏、价格与数字是否准确。自动化测试只覆盖编排、解析与失败隔离，不覆盖模型答得准不准。
+
+### 排查要点（识别）
+
+- **接口返回 503 且列出缺失项**：模型配置未进入容器。对照上文「配置注入」检查 `backend/.env`，注意 compose 的 `environment` 优先级高于 `env_file`。
+- **片段失败且原因为 `LLMTimeoutError`**：单次请求超时。先确认 `LLM_TIMEOUT_SECONDS` 是否够用，再确认片段是否过长（调小 `SPLIT_MAX_DURATION_SECONDS` 能切出更短的片段，识别更快但片段数更多）。
+- **片段失败且原因为「模型服务返回可重试错误」**：限流或服务端故障，错误里带 `status_code`、`code` 与 `request_id`。`LLM_MAX_ATTEMPTS` 次退避重试仍失败才会落库为失败，可稍后单片重试。
+- **片段失败且原因为「模型输出无法解析」**：模型没有返回可用的 JSON 数组。片段的 `understanding_raw_text` 保留了原始返回，据此判断是题面问题（`LLM_UNDERSTANDING_PROMPT`）还是模型侧问题。
+- **片段失败且原因为「片段对象地址生成失败」**：预签名 URL 生成失败，多为 TOS 凭据或网络问题；先按第 5 节跑一次对象存储连通自检。
+- **识别成功但语音条数明显偏少**：查看片段上是否有 `understanding_warnings`（被丢弃的条目）与 `out_of_range` 标记（时间越界，本系统只标记不裁切）。这两类都要在人工核查时单独看，不要当成模型没识别到。
+- **耗时与用量**：`clips[].understanding_attempts` 是实际发出的请求次数（判断重试是否被触发过），片段行的 `understanding_usage_json` 保留每次调用的 token 用量，任务行是 `understanding_started_at` / `understanding_finished_at`。整场耗时约等于片段数 × 单片耗时 ÷ `LLM_CONCURRENCY`，据此估算是否值得提高并发。
+- **重启后识别不会自动续跑**：识别要花钱调模型，进程重启只重新入队切分任务（`requeue_pending`），识别需要重新点击启动；已成功的片段会被跳过，续跑只补未完成的部分。
 
 ## 8. 表结构变更与升级
 

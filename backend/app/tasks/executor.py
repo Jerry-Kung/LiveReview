@@ -2,6 +2,10 @@
 
 单实例部署下的最简方案，满足「关闭页面不影响后台任务继续执行」。多实例与进程重启后的
 任务恢复不在本版范围；任务状态已落库，重启后可按 `uploaded` 状态重新入队。
+
+两条任务体共用同一个线程池，**不拆池**：它们在业务上串联（切分完成才有片段可识别），
+拆池会让「切片还在跑、识别已占满另一池」这种本可避免的并发白白吃掉配额。
+识别耗时长但线程全程阻塞在 HTTP 上，与切分争抢的主要是连接数而非 CPU。
 """
 
 from __future__ import annotations
@@ -11,14 +15,22 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from app.database import SessionLocal
-from app.tasks.runner import STATUS_UPLOADED, list_tasks, reclaim_stale_processing, run_task
+from app.tasks.runner import (
+    STATUS_UPLOADED,
+    TASK_KIND_INGEST,
+    TASK_KIND_UNDERSTAND,
+    list_tasks,
+    reclaim_stale_processing,
+    run_task,
+)
+from app.tasks.understanding import run_understanding
 
 logger = logging.getLogger(__name__)
 
 MAX_WORKERS = 2
 
 _executor: ThreadPoolExecutor | None = None
-_futures: dict[str, Future] = {}
+_futures: dict[tuple[str, str], Future] = {}
 # 可重入锁：submit 持锁期间会调用 _get_executor，普通 Lock 会在同一线程内自死锁
 _lock = threading.RLock()
 
@@ -32,36 +44,43 @@ def _get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def run_sync(task_id: str) -> None:
-    """在独立会话中执行任务：线程内不复用请求会话，避免跨线程共享 Session。"""
+def run_sync(task_id: str, phase: str) -> None:
+    """在独立会话中执行任务体：线程内不复用请求会话，避免跨线程共享 Session。"""
     db = SessionLocal()
     try:
-        run_task(db, task_id)
+        if phase == TASK_KIND_UNDERSTAND:
+            run_understanding(db, task_id)
+        else:
+            run_task(db, task_id)
     finally:
         db.close()
 
 
-def run(task_id: str) -> None:
-    """线程池工作线程的入口：执行任务并清掉在途记录。"""
+def run(task_id: str, phase: str) -> None:
+    """线程池工作线程的入口：执行任务体并清掉在途记录。"""
     try:
-        run_sync(task_id)
+        run_sync(task_id, phase)
     finally:
         with _lock:
-            _futures.pop(task_id, None)
+            _futures.pop((phase, task_id), None)
 
 
-def submit(task_id: str) -> None:
-    """把任务提交到线程池；同一任务重复提交只保留一次。
+def submit(task_id: str, phase: str = TASK_KIND_INGEST) -> None:
+    """把任务提交到线程池；同一任务的同一阶段重复提交只保留一次。
+
+    识别是独立阶段，与切分阶段的在途记录分开跟踪：同一切片的重复点击不会并发出两次
+    模型请求，即使用户连点也只跑一轮。
 
     提交前先确认执行器已就绪，避免在持锁期间触发懒构造。
     """
     executor = _get_executor()
+    key = (phase, task_id)
     with _lock:
-        existing = _futures.get(task_id)
+        existing = _futures.get(key)
         if existing is not None and not existing.done():
-            logger.info("任务 %s 已在执行队列中，跳过重复提交", task_id)
+            logger.info("任务 %s 的 %s 阶段已在执行队列中，跳过重复提交", task_id, phase)
             return
-        _futures[task_id] = executor.submit(run, task_id)
+        _futures[key] = executor.submit(run, task_id, phase)
 
 
 def requeue_pending() -> int:

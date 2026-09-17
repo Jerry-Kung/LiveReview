@@ -11,7 +11,11 @@ from app.config import Settings, get_settings
 from app.database import get_db
 from app.deletion import delete_task_assets
 from app.media import issues_from_json
-from app.models import CLIP_STATUS_UPLOADED, Task
+from app.models import (
+    CLIP_STATUS_UPLOADED,
+    UNDERSTANDING_STATUS_FAILED,
+    Task,
+)
 from app.schemas import (
     CoverageIssueResponse,
     TaskClipResponse,
@@ -19,6 +23,7 @@ from app.schemas import (
     TaskListResponse,
     TaskMetadataResponse,
     TaskResponse,
+    TaskUnderstandingResponse,
 )
 from app.storage import StorageError, describe_error, get_storage
 from app.tasks import (
@@ -29,6 +34,7 @@ from app.tasks import (
     reset_task_for_retry,
     submit,
 )
+from app.transcript import load_segments, load_warnings
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,7 @@ def _to_response(task: Task, settings: Settings) -> TaskResponse:
         error=task.error,
         metadata=_to_metadata(task),
         coverage=_to_coverage(task),
+        understanding=_to_understanding(task, settings),
         clips=_to_clips(task, settings),
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -81,9 +88,41 @@ def _to_clips(task: Task, settings: Settings) -> list[TaskClipResponse]:
                 error=clip.error,
                 object_key=clip.object_key,
                 download_url=download_url,
+                understanding_status=clip.understanding_status,
+                understanding_segment_count=_segment_count(clip),
+                understanding_error=clip.understanding_error,
+                understanding_attempts=clip.understanding_attempts,
+                understanding_at=clip.understanding_finished_at,
+                understanding_warnings=load_warnings(clip),
             )
         )
     return clips
+
+
+def _segment_count(clip) -> int:
+    """片段的语音记录条数：只数已成功的片段，未识别与失败一律为 0。"""
+    if not clip.understanding_succeeded:
+        return 0
+    return len(load_segments(clip))
+
+
+def _to_understanding(task: Task, settings: Settings) -> TaskUnderstandingResponse:
+    """整场识别结论：`finished_at` 为空表示这一轮还没跑过，不把「未开始」渲染成「已完成」。"""
+    failed = sum(
+        1 for clip in task.clips if clip.understanding_status == UNDERSTANDING_STATUS_FAILED
+    )
+    return TaskUnderstandingResponse(
+        status=task.understanding_status,
+        progress=task.understanding_progress,
+        clip_count=task.understanding_clip_count,
+        segment_count=task.understanding_segment_count,
+        failed_clip_count=failed,
+        error=task.understanding_error,
+        started_at=task.understanding_started_at,
+        finished_at=task.understanding_finished_at,
+        # 只回显模型名；base_url 与 api_key 属配置，不进接口响应
+        model_name=settings.llm_model_name,
+    )
 
 
 def _to_coverage(task: Task) -> TaskCoverageResponse | None:

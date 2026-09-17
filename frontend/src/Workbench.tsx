@@ -10,14 +10,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pollIntervalMs } from "./polling";
 import UploadProgress from "./UploadProgress";
 import TaskSummary from "./TaskSummary";
+import type { UnderstandingActions } from "./Understanding";
 import {
   ApiError,
   completeUpload,
   createUpload,
   deleteTask,
   fetchTask,
+  retryClipUnderstanding,
   retryTask,
   sliceFile,
+  startUnderstanding,
   uploadChunk,
   type Task,
 } from "./api";
@@ -63,6 +66,83 @@ function describeError(err: unknown): { message: string; missing: number[] } {
   return { message: err instanceof Error ? err.message : "上传失败，原因未知", missing: [] };
 }
 
+/**
+ * 识别操作与结果刷新，供「本次上传」与「历史任务」两条路径共用。
+ *
+ * `refreshKey` 每次识别状态变化后递增，全文面板据此重新拉取——识别的推进不需要
+ * 重取任务详情之外的额外接口，这里是唯一让正文与列表保持同步的地方。
+ */
+function useUnderstanding(
+  task: Task | null,
+  setTask: (task: Task) => void,
+  setError: (message: string | null) => void
+): UnderstandingActions & { refreshKey: number } {
+  const [starting, setStarting] = useState(false);
+  const [retryingIndex, setRetryingIndex] = useState<number | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const taskId = task?.id ?? null;
+  const running = task?.understanding?.status === "running";
+
+  // 识别在后台推进：处于识别中的任务按轮询节奏刷新，直到有终态结果
+  useEffect(() => {
+    if (!running || taskId === null) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void fetchTask(taskId)
+        .then((latest) => {
+          if (cancelled) return;
+          setTask(latest);
+          setRefreshKey((prev) => prev + 1);
+        })
+        // 轮询失败不打断：任务仍在后台跑，下个周期继续
+        .catch(() => undefined);
+    }, pollIntervalMs());
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [running, taskId, setTask]);
+
+  const onStart = useCallback(async () => {
+    if (taskId === null) return;
+    setStarting(true);
+    setError(null);
+    try {
+      setTask(await startUnderstanding(taskId));
+      setRefreshKey((prev) => prev + 1);
+    } catch (err) {
+      setError(describeError(err).message);
+    } finally {
+      setStarting(false);
+    }
+  }, [taskId, setTask, setError]);
+
+  const onRetryClip = useCallback(
+    async (index: number) => {
+      if (taskId === null) return;
+      setRetryingIndex(index);
+      setError(null);
+      try {
+        setTask(await retryClipUnderstanding(taskId, index));
+        setRefreshKey((prev) => prev + 1);
+      } catch (err) {
+        setError(describeError(err).message);
+      } finally {
+        setRetryingIndex(null);
+      }
+    },
+    [taskId, setTask, setError]
+  );
+
+  return {
+    onStart: () => void onStart(),
+    onRetryClip: (index: number) => void onRetryClip(index),
+    starting,
+    retryingIndex,
+    refreshKey,
+  };
+}
+
 /** 从历史记录打开的任务：只读取并展示，不在这里发起处理。 */
 function OpenedTask({
   taskId,
@@ -76,6 +156,7 @@ function OpenedTask({
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const understanding = useUnderstanding(task, setTask, setError);
 
   const reload = useCallback(async () => {
     try {
@@ -152,6 +233,8 @@ function OpenedTask({
           onReset: onClose,
           deleting,
         }}
+        understanding={understanding}
+        refreshKey={understanding.refreshKey}
       />
       {error !== null && <p className="detail-error">{error}</p>}
     </>
@@ -174,6 +257,10 @@ export default function Workbench({
   const [watching, setWatching] = useState<{ taskId: string; nonce: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 识别操作与结果刷新：切分完成后即可在本页直接启动识别，不必走历史记录
+  const understanding = useUnderstanding(task, setTask, (message) =>
+    setState((prev) => ({ ...prev, error: message }))
+  );
 
   // 轮询任务状态，直到进入终态；组件卸载或换文件时停止。
   useEffect(() => {
@@ -359,6 +446,8 @@ export default function Workbench({
             onReset: handleReset,
             deleting,
           }}
+          understanding={understanding}
+          refreshKey={understanding.refreshKey}
         />
       )}
 
