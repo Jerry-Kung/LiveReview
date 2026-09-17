@@ -164,8 +164,9 @@ describe("上传与任务链路", () => {
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
-    // 对象键在任务头上，供排查时与原文件对应
-    expect(screen.getByText(/liverreview\/original\/live_1_abcd\.ts/)).toBeInTheDocument();
+    // 任务头只给用户可读的摘要，内部对象键不出现在页面上
+    expect(screen.getByRole("heading", { name: "live.ts" })).toBeInTheDocument();
+    expect(screen.queryByText(/liverreview\//)).not.toBeInTheDocument();
   });
 
   it("上传过程中展示字节进度与百分比", async () => {
@@ -354,11 +355,14 @@ describe("上传与任务链路", () => {
     expect(screen.getByText(/任务：已完成/)).toBeInTheDocument();
   });
 
-  it("页眉展示服务与存储状态", async () => {
+  it("页眉不出现后端、对象存储与版本这些内部字样", async () => {
     mockApi([healthRoute]);
     render(<App />);
-    expect(await screen.findByText(/对象存储/)).toBeInTheDocument();
-    expect(screen.getAllByText(/已配置/).length).toBeGreaterThan(0);
+
+    await waitFor(() => expect(screen.getByText(/还没有任务/)).toBeInTheDocument());
+    expect(screen.queryByText("后端")).not.toBeInTheDocument();
+    expect(screen.queryByText("对象存储")).not.toBeInTheDocument();
+    expect(screen.queryByText("版本")).not.toBeInTheDocument();
   });
 
   it("探测成功后展示媒体信息，便于核对与实际媒体是否一致", async () => {
@@ -625,7 +629,7 @@ describe("工作台壳层", () => {
 
     expect(screen.getByRole("heading", { name: "直播视频复盘分析工作台" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用户登录" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/版本/)).toBeInTheDocument());
+    expect(screen.queryByText("后端")).not.toBeInTheDocument();
   });
 
   it("登录为预留功能区：提交后进入账号态并说明未接入后端", async () => {

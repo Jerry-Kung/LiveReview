@@ -1,14 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
-/** 页眉的服务状态：后端连通性与对象存储配置来自健康检查。 */
-function mockHealth(body: unknown, ok = true) {
+/** 页面只需要任务列表接口；页眉不再读取健康检查。 */
+function mockApi() {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.startsWith("/health")) {
-      return { ok, status: ok ? 200 : 503, json: () => Promise.resolve(body) } as Response;
-    }
     if (url.startsWith("/api/tasks?")) {
       return { ok: true, status: 200, json: () => Promise.resolve({ items: [] }) } as Response;
     }
@@ -16,7 +13,7 @@ function mockHealth(body: unknown, ok = true) {
   }) as unknown as typeof fetch;
 }
 
-describe("App 页眉状态", () => {
+describe("App 壳层", () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
@@ -28,70 +25,31 @@ describe("App 页眉状态", () => {
     vi.restoreAllMocks();
   });
 
-  it("健康检查未连通时显示未连接", async () => {
-    mockHealth({}, false);
+  it("页眉只呈现品牌与账号入口，不出现服务或版本信息", () => {
+    mockApi();
     render(<App />);
-    expect(screen.getByText("未连接")).toBeInTheDocument();
-    // 版本与存储都退化为占位符
-    const runtime = screen.getByLabelText("服务状态");
-    expect(runtime.querySelectorAll("dd")[1].textContent).toBe("—");
-    expect(runtime.querySelectorAll("dd")[2].textContent).toBe("—");
+
+    expect(screen.getByRole("heading", { name: "直播视频复盘分析工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "用户登录" })).toBeInTheDocument();
+    // 服务状态行已移除：不再有后端、对象存储、版本这些内部字样
+    expect(screen.queryByText("后端")).not.toBeInTheDocument();
+    expect(screen.queryByText("对象存储")).not.toBeInTheDocument();
+    expect(screen.queryByText("版本")).not.toBeInTheDocument();
   });
 
-  it("后端健康且存储已配置时显示正常状态", async () => {
-    mockHealth({
-      status: "ok",
-      service: "LiveReview",
-      version: "0.1.6",
-      environment: "development",
-      database: "ok",
-      storage: "configured",
-      storage_missing: [],
-    });
-    render(<App />);
-    await waitFor(() => expect(screen.getByText("已连接")).toBeInTheDocument());
-    expect(screen.getByText("已配置")).toBeInTheDocument();
-    expect(screen.getByText("0.1.6")).toBeInTheDocument();
-  });
+  it("任务列表读取失败时不影响上传入口", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/tasks?")) {
+        return { ok: false, status: 503, json: () => Promise.resolve({ detail: "暂不可用" }) } as Response;
+      }
+      throw new Error(`未覆盖的请求：${url}`);
+    }) as unknown as typeof fetch;
 
-  it("缺少凭据时列出缺失项", async () => {
-    mockHealth({
-      status: "ok",
-      service: "LiveReview",
-      version: "0.1.6",
-      environment: "development",
-      database: "ok",
-      storage: "not_configured",
-      storage_missing: ["TOS_ACCESS_KEY", "TOS_SECRET_KEY"],
-    });
     render(<App />);
-    expect(await screen.findByText(/TOS_ACCESS_KEY/)).toBeInTheDocument();
-  });
 
-  it("存储不可用时仍渲染页面其他部分", async () => {
-    mockHealth({
-      status: "degraded",
-      service: "LiveReview",
-      version: "0.1.6",
-      environment: "development",
-      database: "ok",
-      storage: "unavailable",
-      storage_missing: [],
-    });
-    render(<App />);
-    expect(await screen.findByText("不可用")).toBeInTheDocument();
+    expect(await screen.findByText("暂不可用")).toBeInTheDocument();
     expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
   });
-
-  it("健康检查不返回 storage 字段时显示未知", async () => {
-    mockHealth({
-      status: "ok",
-      service: "LiveReview",
-      version: "0.1.6",
-      environment: "development",
-      database: "ok",
-    });
-    render(<App />);
-    expect(await screen.findByText("未知")).toBeInTheDocument();
-  });
 });
+

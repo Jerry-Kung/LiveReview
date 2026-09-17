@@ -10,10 +10,9 @@ import Header, { type SessionUser } from "./Header";
 import LoginDialog from "./LoginDialog";
 import Sidebar from "./Sidebar";
 import Workbench from "./Workbench";
-import { fetchHealth, fetchTasks, type Health, type Task } from "./api";
+import { fetchTasks, type Task } from "./api";
 
 export default function App() {
-  const [health, setHealth] = useState<Health | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -22,16 +21,6 @@ export default function App() {
   const [user, setUser] = useState<SessionUser>(null);
   // 递增计数：新建上传任务时让 Workbench 重挂载，丢掉上一次任务的界面状态
   const [intakeKey, setIntakeKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchHealth().then((data) => {
-      if (!cancelled) setHealth(data);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -63,7 +52,6 @@ export default function App() {
   return (
     <div className="app">
       <Header
-        health={health}
         user={user}
         onSignIn={() => setLoginOpen(true)}
         onSignOut={() => setUser(null)}

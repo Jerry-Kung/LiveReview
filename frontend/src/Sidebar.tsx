@@ -2,8 +2,8 @@
  * 侧栏：发起新任务与历史记录。
  *
  * 历史记录读的是既有的任务列表接口（`GET /api/tasks`），用于回到之前上传的录屏并查看结果；
- * 登录体系与多用户任务归属尚未实现，因此列表标注为预留状态：它列出的是本服务上的全部任务，
- * 不区分账号。
+ * 登录体系与多用户任务归属尚未实现，因此列表列出的是本服务上的全部任务，不区分账号，
+ * 界面上不为此加说明性标注。
  */
 
 import type { Task } from "./api";
@@ -32,18 +32,13 @@ export default function Sidebar({
       </button>
 
       <section className="rail-section">
-        <h2 className="rail-title">
-          历史记录
-          <span className="tag tag--muted">预留</span>
-        </h2>
-        <p className="rail-note">
-          按上传时间倒序列出本服务上的任务，点击可查看结果。账号隔离待登录功能接入后提供。
-        </p>
+        <h2 className="rail-title">历史记录</h2>
+        <p className="rail-note">按上传时间倒序，点击查看结果。</p>
 
         {loading && <p className="rail-empty">正在读取…</p>}
         {!loading && error !== null && <p className="rail-empty rail-empty--warn">{error}</p>}
         {!loading && error === null && tasks.length === 0 && (
-          <p className="rail-empty">还没有任务。上传一场录屏后，处理记录会出现在这里。</p>
+          <p className="rail-empty">还没有任务。上传一场录屏后，记录会出现在这里。</p>
         )}
 
         {!loading && error === null && tasks.length > 0 && (

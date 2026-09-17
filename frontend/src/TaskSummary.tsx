@@ -35,21 +35,23 @@ function stageState(task: Task, atLeast: number, index: number): "done" | "activ
   return "todo";
 }
 
+/** 处理进度：五段刻度轴，与后端的处理链路一一对应。 */
 function ProcessingLine({ task }: { task: Task }) {
   const label = task.status === "processing" ? "正在处理" : "处理记录";
+  const state = taskState(task);
 
   return (
     <div className="stage-bar" role="group" aria-label={`${label}：${describeTask(task)}`}>
       <p className="stage-bar-head">
         <span className="stage-bar-label">{label}</span>
-        <span className="stage-bar-value" data-state={taskState(task)}>
+        <span className="stage-bar-value" data-state={state}>
           任务：{describeTask(task)}
         </span>
       </p>
       <ol className="stages">
         {STAGES.map((stage, index) => (
-          <li key={stage.key} className="stage" data-state={stageState(task, stage.atLeast, index)}>
-            <span className="stage-label">{stage.label}</span>
+          <li key={stage.key} className="tick" data-state={stageState(task, stage.atLeast, index)}>
+            <span className="tick-label">{stage.label}</span>
           </li>
         ))}
       </ol>
@@ -57,7 +59,7 @@ function ProcessingLine({ task }: { task: Task }) {
   );
 }
 
-/** 探测结论：让用户能核对「后端拿到的到底是什么媒体」，字段缺失显示占位。 */
+/** 探测结论：让用户能核对「拿到的到底是什么媒体」，字段缺失显示占位。 */
 function MetadataBlock({ metadata }: { metadata: TaskMetadata }) {
   const technical: Array<[string, string]> = [
     ["分辨率", formatResolution(metadata.width, metadata.height)],
@@ -72,16 +74,19 @@ function MetadataBlock({ metadata }: { metadata: TaskMetadata }) {
 
   return (
     <dl className="metadata" aria-label="媒体信息">
-      <div className="metadata-item metadata-item--lead">
+      <div className="metadata-item metadata-item--duration">
         <dt>时长</dt>
         <dd>{formatDuration(metadata.duration_seconds)}</dd>
       </div>
-      {technical.map(([label, value]) => (
-        <div className="metadata-item" key={label}>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
-        </div>
-      ))}
+      {/* 技术参数逐项可核对，与时长分开成组，避免主次混在一排 */}
+      <div className="metadata-params">
+        {technical.map(([label, value]) => (
+          <div className="metadata-item" key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </div>
     </dl>
   );
 }
@@ -110,14 +115,12 @@ export default function TaskSummary({
   return (
     <div className="task">
       <header className="task-head">
-        <div className="task-identity">
-          <h2 className="task-name">{task.filename ?? "未命名录屏"}</h2>
-          <p className="task-meta">
-            任务 {task.id}
-            {task.size !== null && `，原始文件 ${formatBytes(task.size)}`}
-          </p>
-          {task.object_key && <p className="task-meta task-meta--key">对象键 {task.object_key}</p>}
-        </div>
+        <h2 className="task-name">{task.filename ?? "未命名录屏"}</h2>
+        <p className="task-meta">
+          {task.size !== null ? `原始文件 ${formatBytes(task.size)}` : "体积未知"}
+          {task.metadata?.duration_seconds != null &&
+            ` · 时长 ${formatDuration(task.metadata.duration_seconds)}`}
+        </p>
       </header>
 
       <ProcessingLine task={task} />
@@ -126,7 +129,7 @@ export default function TaskSummary({
         <section className="block">
           <h3 className="block-title">
             <span className="block-no">1</span>
-            媒体信息（探测结论）
+            媒体信息
           </h3>
           <MetadataBlock metadata={task.metadata} />
         </section>
@@ -138,8 +141,9 @@ export default function TaskSummary({
             <span className="block-no">2</span>
             切分结果
           </h3>
+          {/* 覆盖校验通过时是一条普通结论，有问题才升级为警示块 */}
           <dl className="metadata metadata--split" aria-label="切分结果">
-            <div className="metadata-item metadata-item--lead">
+            <div className="metadata-item">
               <dt>片段数</dt>
               <dd>{coverage.clip_count}</dd>
             </div>

@@ -10,6 +10,10 @@
   配色：深藏青页眉 + 冷灰白工作区 + 白面 + 一个企业蓝强调色。不使用暖米色/暖陶色，
   不使用近黑底色配酸绿或朱红，不做卡片网格与柔和投影。
 
+  排版尺度（固定五级，全站只用这五级）：
+  20px 面板主标题 / 17px 页眉与任务名 / 15px 正文与取值 / 13px 说明与次要 /
+  12px 字段名与等宽脚注。层级靠字号与颜色拉开，不靠加粗堆叠。
+
   结构即信息：
   - 侧栏是一条贯穿的竖轴，任务节点挂在轴上——对应视频时间轴。
   - 处理进度是一段带刻度的阶段条，与后端的进度取值一一对应（0 / 20 / 25 / 40~98 / 100）。
@@ -21,16 +25,26 @@
   --navy-deep: #101d2b;
   --canvas: #eef1f5;
   --surface: #ffffff;
-  --line: #d3dae2;
-  --line-strong: #b6c1cc;
-  --ink: #1a2129;
-  --ink-soft: #5d6a78;
+  --line: #d7dde5;
+  --line-strong: #bcc6d1;
+  --ink: #172029;
+  --ink-soft: #5a6675;
+  --ink-mute: #7d8896;
   --accent: #1d5bab;
-  --accent-soft: #e7eef8;
-  --warn: #8a5a00;
-  --warn-soft: #fbf3e2;
-  --ok: #1f6b45;
+  --accent-dark: #17497f;
+  --accent-soft: #eaf0f9;
+  --warn: #7d5200;
+  --warn-soft: #fbf4e4;
+  --warn-line: #e0c489;
+  --ok: #1c6642;
   --radius: 3px;
+
+  /* 五级字号，见文件头说明 */
+  --fs-title: 1.25rem;
+  --fs-lead: 1.0625rem;
+  --fs-body: 0.9375rem;
+  --fs-note: 0.8125rem;
+  --fs-micro: 0.75rem;
 
   --sans: -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", system-ui, sans-serif;
@@ -51,16 +65,23 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: var(--fs-body);
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 标题一律紧行高，避免大字号下被正文行高撑散 */
+h1,
+h2,
+h3 {
+  line-height: 1.3;
 }
 
 .app {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow-x: hidden;
 }
 
 .visually-hidden {
@@ -79,30 +100,24 @@ body {
   outline-offset: 2px;
 }
 
-/* ── 页眉 ───────────────────────────────────────────────────────────── */
+/* ── 页眉：单行紧凑条 ───────────────────────────────────────────────── */
 
 .masthead {
   background: var(--navy);
   color: #fff;
-  padding: 0 1.5rem 0.85rem;
-}
-
-/* 第一行：项目名 + 账号区；第二行：服务状态。
-   存储缺失项可能很长，单列一行避免把项目名与账号挤掉。 */
-.masthead-row {
+  padding: 0 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1.5rem;
-  flex-wrap: wrap;
   min-height: 3.5rem;
 }
 
 .masthead-brand {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.85rem 0;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 /* 标记：两条横线，一长一短，对应一段被切开的录屏 */
@@ -111,8 +126,8 @@ body {
   flex-direction: column;
   justify-content: center;
   gap: 4px;
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 1.25rem;
+  height: 1.25rem;
   flex: none;
 }
 
@@ -135,94 +150,25 @@ body {
 
 .masthead-name {
   margin: 0;
-  font-size: 1.0625rem;
+  font-size: var(--fs-lead);
   font-weight: 600;
   letter-spacing: 0.01em;
-  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* 副名：说明这句工作台是做什么的，窄屏隐藏 */
+.masthead-scope {
+  padding-left: 0.7rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: var(--fs-note);
+  color: #93a6ba;
+  white-space: nowrap;
 }
 
 .masthead-side {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-  min-width: 0;
-  flex-shrink: 1;
-}
-
-.runtime {
-  display: flex;
-  gap: 1.75rem;
-  margin: 0;
-  padding: 0.55rem 0 0.35rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: 0.8125rem;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-.runtime-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-/* 只有「对象存储」那一列会很长，它可以让出宽度；其余两列保持原样 */
-.runtime-item:first-child,
-.runtime-item:last-child {
   flex: none;
-}
-
-.runtime-item:nth-child(2) {
-  flex: 1 1 8rem;
-  min-width: 0;
-}
-
-.runtime-item dt {
-  color: #93a6ba;
-  font-size: 0.75rem;
-}
-
-/* 存储缺失项可能很长：让它折行而不是把页眉撑开 */
-/* 存储缺失项可能很长：让它折行而不是把页眉撑开。
-    flex 容器里的长串必须 break-all 才能参与收缩，否则其最小内容宽度会把整行顶出去。 */
-.runtime-item dd {
-  margin: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4rem;
-  font-family: var(--mono);
-  font-size: 0.8125rem;
-  color: #e4ebf2;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-all;
-}
-
-.runtime-item:last-child dd {
-  max-width: none;
-}
-
-/* 状态点不参与折行，与首行文字对齐 */
-.runtime-item dd .dot {
-  align-self: flex-start;
-  margin-top: 0.5em;
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.dot[data-state="ok"] {
-  background: #4fb37c;
-}
-
-.dot[data-state="attention"] {
-  background: #e0a33c;
 }
 
 .account {
@@ -237,7 +183,7 @@ body {
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 0.8125rem;
+  font-size: var(--fs-note);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -248,31 +194,31 @@ body {
   display: flex;
   flex-direction: column;
   line-height: 1.25;
-  font-size: 0.8125rem;
+  font-size: var(--fs-note);
 }
 
 .account-text span {
   color: #93a6ba;
-  font-size: 0.75rem;
+  font-size: var(--fs-micro);
 }
 
-/* ── 布局 ───────────────────────────────────────────────────────────── */
+/* ── 布局：整页在同一个内容框内，宽屏下居中 ──────────────────────────── */
 
 .layout {
   flex: 1;
+  width: 100%;
+  max-width: 84rem;
+  margin: 0 auto;
   display: grid;
-  grid-template-columns: 17.5rem minmax(0, 1fr);
-  align-items: start;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  align-items: stretch;
 }
 
 /* ── 侧栏：一条贯穿的竖轴 ───────────────────────────────────────────── */
 
-/* 侧栏：一条贯穿的竖轴。页眉不再吸顶，因此侧栏也不吸顶，
-   让整页在同一层里滚动，避免滚动时工作区内容从侧栏下方穿过。 */
 .rail {
-  padding: 2rem 1.25rem 3rem 1.5rem;
+  padding: 1.75rem 1.25rem 3rem 2rem;
   border-right: 1px solid var(--line);
-  min-height: 100%;
 }
 
 .rail-new {
@@ -280,9 +226,9 @@ body {
   align-items: center;
   gap: 0.6rem;
   width: 100%;
-  padding: 0.7rem 0.9rem;
+  padding: 0.7rem 1rem;
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: #fff;
   background: var(--accent);
@@ -293,8 +239,8 @@ body {
 }
 
 .rail-new:hover {
-  background: #17497f;
-  border-color: #17497f;
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
 }
 
 /* 加号：两根细线 */
@@ -333,35 +279,23 @@ body {
 }
 
 .rail-title {
-  margin: 0 0 0.5rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8125rem;
+  margin: 0 0 0.25rem;
+  font-size: var(--fs-micro);
   font-weight: 600;
-  color: var(--ink);
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+  text-transform: uppercase;
 }
 
 .rail-note {
-  margin: 0 0 0.9rem;
-  font-size: 0.75rem;
-  line-height: 1.55;
-  color: var(--ink-soft);
-}
-
-.tag {
-  font-size: 0.6875rem;
-  font-weight: 400;
-  padding: 0.05rem 0.35rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--line-strong);
+  margin: 0 0 1rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
 .rail-empty {
   margin: 0;
-  font-size: 0.8125rem;
-  line-height: 1.6;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
@@ -381,8 +315,8 @@ body {
   content: "";
   position: absolute;
   left: 0.3rem;
-  top: 0.4rem;
-  bottom: 0.4rem;
+  top: 0.5rem;
+  bottom: 0.5rem;
   width: 1px;
   background: var(--line-strong);
 }
@@ -391,11 +325,12 @@ body {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.15rem;
   width: 100%;
-  padding: 0.5rem 0.6rem 0.5rem 1.5rem;
-  margin-bottom: 0.2rem;
+  padding: 0.55rem 0.6rem 0.55rem 1.4rem;
+  margin-bottom: 0.15rem;
   font: inherit;
+  font-size: var(--fs-note);
   text-align: left;
   background: none;
   border: 0;
@@ -408,7 +343,7 @@ body {
   content: "";
   position: absolute;
   left: 0.05rem;
-  top: 0.85rem;
+  top: 0.9rem;
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 50%;
@@ -426,7 +361,7 @@ body {
 }
 
 .history-item:hover {
-  background: #e4e9ef;
+  background: #e5eaf1;
 }
 
 .history-item[data-active="true"]:hover {
@@ -434,17 +369,17 @@ body {
 }
 
 .history-name {
-  font-size: 0.8125rem;
+  font-size: var(--fs-note);
   font-weight: 600;
   line-height: 1.4;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .history-meta {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-micro);
 }
 
 .history-status[data-state="ok"] {
@@ -458,31 +393,31 @@ body {
 .history-time,
 .history-stamp {
   font-family: var(--mono);
-  font-size: 0.6875rem;
-  color: var(--ink-soft);
+  font-size: var(--fs-micro);
+  color: var(--ink-mute);
 }
 
 /* ── 工作区 ─────────────────────────────────────────────────────────── */
 
 .stage {
-  padding: 2rem 2.25rem 4rem;
-  max-width: 62rem;
+  padding: 2rem 2.5rem 4rem;
+  min-width: 0;
 }
 
 .workbench {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  max-width: 60rem;
 }
 
 /* 从历史记录进入时的说明条，贴在工作区顶部 */
 .opened-note {
   margin: 0;
-  padding: 0.6rem 0.9rem;
+  padding: 0.65rem 1rem;
   background: var(--accent-soft);
   border-left: 3px solid var(--accent);
-  font-size: 0.8125rem;
-  line-height: 1.6;
+  font-size: var(--fs-note);
   color: var(--ink);
 }
 
@@ -491,7 +426,8 @@ body {
   background: var(--surface);
   border: 1px solid var(--line);
   border-top: 3px solid var(--navy);
-  padding: 1.75rem 1.75rem 1.9rem;
+  border-radius: var(--radius);
+  padding: 1.75rem;
 }
 
 /* 失败态：左侧竖条表达「需留意」，不单靠颜色 */
@@ -503,25 +439,23 @@ body {
 
 .intake-title {
   margin: 0 0 0.5rem;
-  font-size: 1.25rem;
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  line-height: 1.3;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .intake-lead {
-  margin: 0 0 1.4rem;
-  max-width: 46ch;
-  font-size: 0.875rem;
-  line-height: 1.7;
+  margin: 0 0 1.5rem;
+  max-width: 52ch;
+  font-size: var(--fs-body);
   color: var(--ink-soft);
 }
 
 .file-picker {
   display: flex;
   align-items: center;
-  gap: 0.9rem;
-  padding: 1rem 1.15rem;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: #f7f9fb;
@@ -569,15 +503,16 @@ body {
 .file-picker-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .file-picker-text strong {
-  font-size: 0.9375rem;
+  font-size: var(--fs-body);
+  font-weight: 600;
 }
 
 .file-picker-text span {
-  font-size: 0.8125rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
@@ -586,7 +521,8 @@ body {
   background: var(--surface);
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
-  padding: 1.25rem 1.5rem;
+  border-radius: var(--radius);
+  padding: 1.35rem 1.5rem;
 }
 
 .upload-progress-head {
@@ -595,26 +531,26 @@ body {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.8rem;
 }
 
 .upload-progress-label {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--fs-lead);
   font-weight: 600;
 }
 
 .upload-progress-value {
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.875rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
 .bar {
   height: 6px;
   background: #dfe5ec;
-  border-radius: 1px;
+  border-radius: 3px;
   overflow: hidden;
 }
 
@@ -622,10 +558,11 @@ body {
   display: block;
   height: 100%;
   background: var(--accent);
+  transition: width 0.2s ease;
 }
 
 .upload-progress .hint {
-  margin-top: 0.75rem;
+  margin-top: 0.8rem;
 }
 
 /* ── 任务结果 ───────────────────────────────────────────────────────── */
@@ -633,48 +570,34 @@ body {
 .task {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
+/* 标题块：任务名与一行摘要，摘要是次级的，不再与标题抢视觉 */
 .task-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
-}
-
-.task-identity {
-  min-width: 0;
+  padding-bottom: 0.25rem;
 }
 
 .task-name {
   margin: 0 0 0.3rem;
   font-size: 1.375rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
-  word-break: break-all;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  overflow-wrap: anywhere;
 }
 
 .task-meta {
   margin: 0;
-  font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
-  word-break: break-all;
-}
-
-.task-meta--key {
-  margin-top: 0.15rem;
 }
 
 /* 处理进度：一条贯穿的刻度轴，与后端进度取值一一对应 */
 .stage-bar {
   background: var(--surface);
   border: 1px solid var(--line);
-  padding: 1rem 1.25rem 1.1rem;
+  border-radius: var(--radius);
+  padding: 1.15rem 1.5rem 1.25rem;
 }
 
 .stage-bar-head {
@@ -683,17 +606,17 @@ body {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin: 0 0 1.1rem;
+  margin: 0 0 1.25rem;
 }
 
 .stage-bar-label {
-  font-size: 0.75rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
 .stage-bar-value {
-  font-size: 1.0625rem;
-  font-weight: 650;
+  font-size: var(--fs-lead);
+  font-weight: 600;
 }
 
 .stage-bar-value[data-state="ok"] {
@@ -714,12 +637,12 @@ body {
 }
 
 /* 每段是一个刻度：一条细轴 + 一个表示该阶段状态的方块 */
-.stage {
+.tick {
   position: relative;
-  padding: 0.85rem 0.5rem 0 0;
+  padding: 0.9rem 0.75rem 0 0;
 }
 
-.stage::before {
+.tick::before {
   content: "";
   position: absolute;
   top: 0;
@@ -729,8 +652,8 @@ body {
   background: var(--line-strong);
 }
 
-/* 刻度块：已完成的阶段是实心方块，进行中是半高方块，未开始是空心 */
-.stage::after {
+/* 刻度块：已完成的阶段是实心方块，进行中是空心加粗，未开始是空心细 */
+.tick::after {
   content: "";
   position: absolute;
   top: -3px;
@@ -741,29 +664,29 @@ body {
   border: 1px solid var(--line-strong);
 }
 
-.stage[data-state="done"]::after {
+.tick[data-state="done"]::after {
   background: var(--accent);
   border-color: var(--accent);
 }
 
-.stage[data-state="active"]::after {
+.tick[data-state="active"]::after {
   background: var(--surface);
   border-color: var(--accent);
   border-width: 3px;
 }
 
-.stage-label {
-  font-size: 0.75rem;
-  line-height: 1.4;
+.tick-label {
   display: block;
-  color: var(--ink-soft);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+  color: var(--ink-mute);
 }
 
-.stage[data-state="done"] .stage-label {
+.tick[data-state="done"] .tick-label {
   color: var(--ink);
 }
 
-.stage[data-state="active"] .stage-label {
+.tick[data-state="active"] .tick-label {
   color: var(--accent);
   font-weight: 600;
 }
@@ -772,74 +695,108 @@ body {
 .block {
   background: var(--surface);
   border: 1px solid var(--line);
-  padding: 1.25rem 1.5rem 1.5rem;
+  border-radius: var(--radius);
+  padding: 1.35rem 1.5rem 1.5rem;
 }
 
 .block-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.6rem;
-  margin: 0 0 1rem;
-  font-size: 0.9375rem;
-  font-weight: 650;
+  margin: 0 0 1.1rem;
+  font-size: var(--fs-lead);
+  font-weight: 600;
 }
 
 .block-no {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-micro);
   font-weight: 400;
+  line-height: 1.5;
   color: var(--accent);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  padding: 0.05rem 0.35rem;
+  padding: 0 0.35rem;
 }
 
+/* 媒体信息：左边时长是最重要的核对值，右边是参数清单，一行一对标签与取值 */
 .metadata {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
-  gap: 0.9rem 1.25rem;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 2rem;
   margin: 0;
-  padding-top: 0.9rem;
+  padding-top: 1.1rem;
   border-top: 1px solid var(--line);
+  align-items: start;
 }
 
 .metadata--split {
-  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem 2.5rem;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* 切分结果三项与媒体信息用同一套「标签在上、取值在下」的读法，但不必画分隔线 */
+.metadata--split .metadata-item {
+  gap: 0.25rem;
+}
+
+/* 参数清单：一行一对，中间一条细线分隔，读起来像规格表 */
+.metadata-params {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 2.5rem;
+  align-content: start;
+}
+
+.metadata-params .metadata-item {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.metadata-params .metadata-item dt {
+  flex: none;
+  width: 4.5rem;
 }
 
 .metadata-item {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.2rem;
+  min-width: 0;
 }
 
 .metadata-item dt {
-  font-size: 0.75rem;
-  color: var(--ink-soft);
+  font-size: var(--fs-micro);
+  color: var(--ink-mute);
 }
 
 .metadata-item dd {
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.9375rem;
-  word-break: break-word;
+  font-size: var(--fs-body);
+  overflow-wrap: anywhere;
 }
 
 /* 时长与片段数比其余字段重要一档 */
+.metadata-item--duration dd,
 .metadata-item--lead dd {
   font-size: 1.375rem;
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .coverage-issues {
-  margin: 1rem 0 0;
-  padding: 0.75rem 0.9rem 0.75rem 2rem;
+  margin: 1.25rem 0 0;
+  padding: 0.75rem 1rem 0.75rem 2rem;
   list-style: disc;
   background: var(--warn-soft);
   border-left: 3px solid var(--warn);
-  font-size: 0.8125rem;
-  line-height: 1.6;
+  font-size: var(--fs-note);
   color: var(--warn);
 }
 
@@ -852,26 +809,30 @@ body {
 
 .clips caption {
   text-align: left;
-  font-size: 0.75rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
-  padding-bottom: 0.5rem;
+  padding-bottom: 0.6rem;
 }
 
 .clips th {
   text-align: left;
-  font-size: 0.75rem;
+  font-size: var(--fs-micro);
   font-weight: 500;
-  color: var(--ink-soft);
-  padding: 0.4rem 0.75rem 0.4rem 0;
+  color: var(--ink-mute);
+  padding: 0.5rem 0.75rem 0.5rem 0;
   border-bottom: 1px solid var(--line-strong);
   white-space: nowrap;
 }
 
 .clips td {
-  padding: 0.55rem 0.75rem 0.55rem 0;
+  padding: 0.6rem 0.75rem 0.6rem 0;
   border-bottom: 1px solid var(--line);
-  font-size: 0.8125rem;
+  font-size: var(--fs-note);
   vertical-align: middle;
+}
+
+.clips tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .clips tr[data-state="attention"] td {
@@ -895,7 +856,7 @@ body {
 
 /* 位置条：片段在整场时长上的比例区间 */
 .cell-axis {
-  width: 30%;
+  width: 28%;
   min-width: 6rem;
 }
 
@@ -904,7 +865,7 @@ body {
   display: block;
   height: 0.5rem;
   background: #e6eaef;
-  border-radius: 1px;
+  border-radius: 3px;
 }
 
 .axis-span {
@@ -912,18 +873,18 @@ body {
   top: 0;
   bottom: 0;
   background: var(--accent);
-  border-radius: 1px;
+  border-radius: 3px;
 }
 
 .clip-error {
   display: block;
-  margin-top: 0.15rem;
-  font-size: 0.75rem;
+  margin-top: 0.2rem;
+  font-size: var(--fs-micro);
   color: var(--warn);
 }
 
 .col-axis {
-  width: 30%;
+  width: 28%;
 }
 
 /* ── 按钮与提示 ─────────────────────────────────────────────────────── */
@@ -932,12 +893,13 @@ body {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+  padding-top: 0.25rem;
 }
 
 .btn {
   font: inherit;
-  font-size: 0.875rem;
-  padding: 0.5rem 1rem;
+  font-size: var(--fs-body);
+  padding: 0.5rem 1.1rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface);
@@ -947,6 +909,7 @@ body {
 
 .btn:hover:not(:disabled) {
   border-color: var(--ink-soft);
+  background: #f2f5f9;
 }
 
 .btn--primary {
@@ -957,27 +920,28 @@ body {
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: #17497f;
-  border-color: #17497f;
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
 }
 
 /* 删除不可逆：用警示色描边区别于同排的次要按钮 */
 .btn--danger {
   color: var(--warn);
-  border-color: #d8b878;
+  border-color: var(--warn-line);
   background: transparent;
 }
 
 .btn--danger:hover:not(:disabled) {
   border-color: var(--warn);
+  background: var(--warn-soft);
 }
 
 .btn--quiet {
   background: transparent;
   border-color: #3c5670;
   color: #e4ebf2;
-  font-size: 0.8125rem;
-  padding: 0.35rem 0.75rem;
+  font-size: var(--fs-note);
+  padding: 0.35rem 0.85rem;
 }
 
 .btn--quiet:hover:not(:disabled) {
@@ -992,8 +956,7 @@ body {
 
 .hint {
   margin: 0;
-  font-size: 0.8125rem;
-  line-height: 1.6;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
@@ -1003,13 +966,13 @@ body {
 
 .detail-error {
   margin: 0;
-  padding: 0.75rem 0.9rem;
+  padding: 0.8rem 1rem;
   background: var(--warn-soft);
   border-left: 3px solid var(--warn);
-  font-size: 0.8125rem;
-  line-height: 1.6;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: var(--fs-note);
   color: var(--warn);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* ── 登录弹层 ───────────────────────────────────────────────────────── */
@@ -1031,43 +994,43 @@ body {
   max-width: 24rem;
   background: var(--surface);
   border-top: 3px solid var(--navy);
+  border-radius: var(--radius);
   padding: 1.5rem 1.5rem 1.75rem;
 }
 
 .dialog-title {
   margin: 0 0 0.5rem;
-  font-size: 1.125rem;
-  font-weight: 650;
+  font-size: var(--fs-title);
+  font-weight: 600;
 }
 
 .dialog-note {
-  margin: 0 0 1.25rem;
-  font-size: 0.8125rem;
-  line-height: 1.65;
+  margin: 0 0 1.35rem;
+  font-size: var(--fs-note);
   color: var(--ink-soft);
 }
 
 .dialog-form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.1rem;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.35rem;
 }
 
 .field-label {
-  font-size: 0.75rem;
+  font-size: var(--fs-micro);
   color: var(--ink-soft);
 }
 
 .field-input {
   font: inherit;
-  font-size: 0.9375rem;
-  padding: 0.5rem 0.65rem;
+  font-size: var(--fs-body);
+  padding: 0.5rem 0.7rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1077,36 +1040,66 @@ body {
 
 .field-notice {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--fs-note);
   color: var(--warn);
 }
 
 /* ── 窄屏 ───────────────────────────────────────────────────────────── */
 
+@media (max-width: 68rem) {
+  .masthead-scope {
+    display: none;
+  }
+
+  .masthead {
+    padding: 0 1.5rem;
+  }
+
+  .metadata {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.25rem;
+  }
+
+  .metadata-params {
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+  }
+}
+
 @media (max-width: 60rem) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
+    max-width: none;
   }
+
   .rail {
-    min-height: 0;
     border-right: 0;
     border-bottom: 1px solid var(--line);
-    padding: 1.5rem 1.5rem 1.75rem;
+    padding: 1.5rem;
   }
 
   .stage {
     padding: 1.5rem 1.5rem 3rem;
   }
 
-  .masthead {
-    padding: 0 1.5rem 0.85rem;
+  .workbench {
+    max-width: none;
   }
 }
 
 @media (max-width: 40rem) {
+  /* 两列排布：每段自带刻度与标签，末段不与其他段并列，避免出现半行空档 */
   .stages {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.75rem 0;
+    gap: 1.25rem 1.25rem;
+  }
+
+  .tick {
+    padding-right: 0;
+  }
+
+  .tick:last-child {
+    grid-column: 1 / -1;
   }
 
   /* 窄屏放不下位置条，时间范围列本身就是定位依据 */
@@ -1121,12 +1114,14 @@ body {
     overflow-x: auto;
   }
 
-  .stage {
-    padding-right: 1rem;
+  .masthead {
+    padding: 0 1rem;
+    gap: 0.75rem;
   }
 
-  .masthead {
-    padding: 0 1rem 0.6rem;
+  .masthead-name {
+    font-size: var(--fs-body);
+    white-space: normal;
   }
 
   .rail,
@@ -1135,13 +1130,19 @@ body {
     padding-right: 1rem;
   }
 
-  .runtime-item dd {
-    max-width: 100%;
+  .metadata--split {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metadata-params {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
   .intake,
   .block,
-  .stage-bar {
+  .stage-bar,
+  .upload-progress {
     padding-left: 1.1rem;
     padding-right: 1.1rem;
   }

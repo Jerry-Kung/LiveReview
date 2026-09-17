@@ -4,17 +4,6 @@
  * 与后端 `app/schemas.py` 的契约一一对应；后端返回的中文失败原因为用户可见文案。
  */
 
-/** 健康检查响应：页眉的服务状态来自这里。 */
-export type Health = {
-  status: string;
-  service: string;
-  version: string;
-  environment: string;
-  database: string;
-  storage?: string;
-  storage_missing?: string[];
-};
-
 export type UploadCreateResponse = {
   upload_id: string;
   task_id: string;
@@ -151,16 +140,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   return (await response.json()) as T;
-}
-
-/** 健康检查：失败时返回 null，页眉按「未连接」呈现，不阻断页面其他部分。 */
-export async function fetchHealth(): Promise<Health | null> {
-  try {
-    const response = await fetch("/health");
-    return response.ok ? ((await response.json()) as Health) : null;
-  } catch {
-    return null;
-  }
 }
 
 export function createUpload(filename: string, size: number): Promise<UploadCreateResponse> {
