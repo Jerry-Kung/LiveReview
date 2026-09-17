@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import tasks
+from app.config import get_settings
 from app.database import init_db
 from app.routers import health, tasks as tasks_router
 from app.routers import uploads
@@ -20,7 +21,8 @@ async def lifespan(app: FastAPI):
     tasks.shutdown()
 
 
-app = FastAPI(title="LiveReview", version="0.1.4", lifespan=lifespan)
+# 版本号统一取自配置，避免文档与接口各写一份造成漂移
+app = FastAPI(title="LiveReview", version=get_settings().app_version, lifespan=lifespan)
 
 app.include_router(health.router)
 app.include_router(uploads.router)

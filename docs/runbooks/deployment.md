@@ -212,13 +212,23 @@ docker compose -f docker/docker-compose.yml exec backend python -m app.media.cli
 
 ## 8. 表结构变更与升级
 
-表在启动时用 `create_all` 建立，只建缺失的表、不改已存在的表。升级到新增了表或字段的版本后，必须先删除 `liverreview-data` 卷中的 SQLite 文件再重启，否则新字段不会生效——查询会直接报 `no such column`：
+表在启动时用 `create_all` 建立，只建缺失的表、不改已存在的表；随后 `init_db` 会再跑一次补列：把模型里有、库里没有的**可空或有默认值**的新列用 `ALTER TABLE ADD COLUMN` 加上。因此新增表与新增可选字段都能直接升级——直接重启后端即可，不必删库：
+
+```bash
+docker compose -f docker/docker-compose.yml build backend
+docker compose -f docker/docker-compose.yml up -d
+```
+
+补列只做加法：不改已有列的类型、可空性与含义，也不删除列。还有两类变更补列处理不了，必须删库重建：
+
+- 新增**既不可空又无默认值**的列（补列时会明确报错并给出列名，不会静默跳过）；
+- 改列语义（改类型、改可空性、重命名列），或改动已有数据的含义。
 
 ```bash
 docker compose -f docker/docker-compose.yml exec backend python -c "import pathlib; p=pathlib.Path('/app/data/liverreview.db'); p.unlink(missing_ok=True); print('数据库文件已删除，重启后重建')"
 docker compose -f docker/docker-compose.yml restart backend
 ```
 
-删除数据库会一并丢掉历史任务与探测结果（对象存储中的原始视频不受影响，但记录与对象的对应关系会丢失，需要重新上传）。**V0.1.5 新增了 `media_clips` 表与 `tasks` 表的切分字段，从 V0.1.4 升级时必须执行本步骤。**
+删除数据库会一并丢掉历史任务与探测结果（对象存储中的原始视频不受影响，但记录与对象的对应关系会丢失，需要重新上传）。
 
-从 V0.1.4 升级时注意：V0.1.4 的任务在探测成功后已删除本地副本，这类任务重试时会按对象键从 TOS 取回原始视频再处理，属正常路径，只是多一次下载。
+跨版本升级的注意点：V0.1.4 的任务在探测成功后已删除本地副本，这类任务重试时会按对象键从 TOS 取回原始视频再处理，属正常路径，只是多一次下载。V0.1.5 之前创建的任务在清单里没有切片记录，重试时会重新切分并上传，桶里多出来的旧对象不会被自动回收，需要时人工清理。
