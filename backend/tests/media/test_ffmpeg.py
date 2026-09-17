@@ -16,12 +16,14 @@ from app.media.convert import (
     REMUX_ARGS,
     REMUX_INPUT_ARGS,
     convert_to_mp4,
+    duration_tolerance,
     is_target_container,
     prepare_split_source,
     validate_converted,
 )
 from app.media.ffmpeg import FFmpegError, build_ffmpeg_args, run_ffmpeg
 from app.media.ffprobe import MediaMetadata, MediaStream
+from app.media.probe import ProbeError, measure_timeline
 from app.media.split import (
     CLIP_ARGS_TEMPLATE,
     CLIP_INPUT_ARGS_TEMPLATE,
@@ -241,6 +243,143 @@ def test_validate_converted_skips_duration_check_when_source_duration_unknown():
     validate_converted(unknown_source, _metadata(600.0, format_name="mp4"))
 
 
+def test_duration_tolerance_has_an_absolute_floor():
+    """短素材按比例算出的容差太小，取绝对下限。"""
+    assert duration_tolerance(10.0) == pytest.approx(1.0)
+    assert duration_tolerance(2000.0) == pytest.approx(10.0)
+
+
+def test_validate_converted_compares_playable_time_not_nominal_duration():
+    """回归用例：源的标称时长包含直播断流的空洞，不该拿它当比对基准。
+
+    线上那份素材：源标称 1683.2s，产物 1649.7s，偏差 33.5s 远超 8.4s 容差，被判
+    「产物可能被截断」，实际一个包都没少。改用可播放时长后两侧几乎相同（1638.1s 对
+    1638.2s），不再有误判。
+    """
+    validate_converted(
+        _metadata(1683.2),
+        _metadata(1649.7, format_name="mov,mp4,m4a,3gp,3g2,mj2"),
+        original_media_seconds=1638.1,
+        converted_media_seconds=1638.2,
+    )
+
+
+def test_validate_converted_still_rejects_a_truncated_product_in_playable_time():
+    """换成可播放时长也不是免死金牌：真的短了照样判失败。"""
+    with pytest.raises(FFmpegError, match="时长与原始视频偏差过大"):
+        validate_converted(
+            _metadata(1683.2),
+            _metadata(1649.7, format_name="mp4"),
+            original_media_seconds=1638.1,
+            converted_media_seconds=900.0,
+        )
+
+
+def test_validate_converted_falls_back_to_nominal_duration_when_unmeasured():
+    """量不出可播放时长时退回标称比对，按最严容差判——没有证据就不给放宽。"""
+    with pytest.raises(FFmpegError, match="时长与原始视频偏差过大"):
+        validate_converted(
+            _metadata(1683.2),
+            _metadata(1649.7, format_name="mp4"),
+            original_media_seconds=None,
+            converted_media_seconds=None,
+        )
+
+
+def test_validate_converted_accepts_a_slightly_longer_product():
+    """产物略长只可能来自首尾对齐，容差之内不该判失败。"""
+    validate_converted(
+        _metadata(600.0),
+        _metadata(601.0, format_name="mp4"),
+        original_media_seconds=600.0,
+        converted_media_seconds=601.0,
+    )
+
+
+# —— 时间轴统计 ——
+
+
+def test_measure_timeline_needs_a_real_file(tmp_path: Path):
+    with pytest.raises(ProbeError, match="不存在或不是普通文件"):
+        measure_timeline(tmp_path / "absent.ts", ffprobe_path=fake_ffprobe_args())
+
+
+def test_measure_timeline_reports_playable_media_for_a_gapfree_source(source: Path):
+    """时间轴连续时可播放时长就是首尾跨度，`measured` 为真。"""
+    report = measure_timeline(source, ffprobe_path=fake_ffprobe_args())
+
+    assert report.measured is True
+    assert report.gap_count == 0
+    # 替身的源清单按默认时长（600s）铺包，首尾跨度为 600s 减去一个包间隔
+    assert report.media_seconds == pytest.approx(600.0 - 0.04, abs=0.1)
+
+
+def test_measure_timeline_excludes_discontinuities_from_playable_time(source: Path, monkeypatch):
+    """断层不计入可播放时长，这正是源与产物可比的依据。
+
+    在第 2 个包之后插入 11s 空洞：首尾跨度随之变长，但那 11s 加一个正常包间隔被归为断层
+    （量的是相邻两个包的时间戳之差），可播放时长只少掉一个正常包间隔。
+    """
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_GAP_AT", "2")
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_GAP_SECONDS", "11.0")
+    report = measure_timeline(source, ffprobe_path=fake_ffprobe_args())
+
+    assert report.measured is True
+    assert report.gap_count == 1
+    assert report.gap_seconds == pytest.approx(11.04, abs=0.05)
+    assert report.media_seconds == pytest.approx(600.0 - 0.04, abs=0.1)
+
+
+def test_measure_timeline_ignores_normal_packet_spacing(source: Path, monkeypatch):
+    """正常包间隔不算断层：22fps 的录屏每包约 45ms，累计起来会淹没真正的空洞。
+
+    把包间隔压到 10ms 并数满 4000 个包：若实现按相邻包相减判断，这里会累计出上百秒的
+    伪断层；按「超过阈值才算断层」则一处都没有。
+    """
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_INTERVAL", "0.01")
+    report = measure_timeline(source, ffprobe_path=fake_ffprobe_args())
+
+    assert report.gap_count == 0
+    assert report.gap_seconds == 0.0
+
+
+def test_measure_timeline_ignores_out_of_order_timestamps(source: Path, monkeypatch):
+    """B 帧让 PTS 乱序，回退的包不能被当成负断层，也不能把跨度算长。
+
+    真实素材里近半数包是回退的（相邻差 -0.045s），按相邻包相减会凭空造出大量伪影。
+    """
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_OUT_OF_ORDER", "1")
+    ordered = measure_timeline(source, ffprobe_path=fake_ffprobe_args())
+
+    assert ordered.gap_count == 0
+    assert ordered.gap_seconds == 0.0
+    assert ordered.media_seconds > 0
+
+
+def test_measure_timeline_raises_when_ffprobe_fails(source: Path, monkeypatch):
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_MODE", "packets-fail")
+
+    with pytest.raises(ProbeError, match="退出码 1"):
+        measure_timeline(source, ffprobe_path=fake_ffprobe_args())
+
+
+def test_measure_timeline_is_unmeasured_when_the_listing_is_truncated(source: Path, monkeypatch):
+    """清单被截断时返回「没量到」而不是一个偏短的时长。
+
+    偏短的源时长会让产物看上去「没有变短」，真实的截断就被放过去了。
+    """
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_COUNT", "200")
+    report = measure_timeline(source, ffprobe_path=fake_ffprobe_args(), max_scan_bytes=64)
+
+    assert report.measured is False
+    assert report.media_seconds == 0.0
+
+
+def test_measure_timeline_rejects_missing_binary(source: Path):
+    with pytest.raises(ProbeError, match="未找到 ffprobe"):
+        measure_timeline(source, ffprobe_path="liverreview-no-such-ffprobe")
+
+
 # —— 调用执行 ——
 
 
@@ -360,9 +499,36 @@ def test_convert_to_mp4_rejects_truncated_product(source: Path, tmp_path: Path, 
         )
 
 
-def test_convert_to_mp4_maps_ffmpeg_failure(source: Path, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("LIVERREVIEW_FAKE_FFMPEG_MODE", "fail")
-    with pytest.raises(FFmpegError, match="执行失败"):
+def test_convert_to_mp4_accepts_a_source_whose_duration_includes_gaps(
+    source: Path, tmp_path: Path, monkeypatch
+):
+    """端到端回归：源的标称时长含空洞、产物不含，转换必须照常通过。
+
+    造一份源标称 605s、产物 600s 的场景（偏差 5.0s，超出 3.0s 容差）——线上那份
+    1683.2s 素材就是同一形状。按可播放时长比，两侧都是清单的首尾跨度，不受标称时长影响。
+    """
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_COUNT", "3")
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_GAP_AT", "1")
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PACKET_GAP_SECONDS", "4.0")
+
+    metadata = convert_to_mp4(
+        source,
+        tmp_path / "converted.mp4",
+        original_metadata=_metadata(605.0),
+        ffmpeg_command=fake_ffmpeg_args(),
+        ffprobe_command=fake_ffprobe_args(),
+    )
+
+    assert metadata.duration_seconds == pytest.approx(600.0, abs=0.01)
+
+
+def test_convert_to_mp4_rejects_a_product_with_less_playable_content(
+    source: Path, tmp_path: Path, monkeypatch
+):
+    """产物只切出一半内容时必须判失败：这是改比可播放时长后仍然要守住的红线。"""
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_PRODUCT_PACKET_RATIO", "0.5")
+
+    with pytest.raises(FFmpegError, match="产物可能被截断"):
         convert_to_mp4(
             source,
             tmp_path / "converted.mp4",
@@ -370,6 +536,37 @@ def test_convert_to_mp4_maps_ffmpeg_failure(source: Path, tmp_path: Path, monkey
             ffmpeg_command=fake_ffmpeg_args(),
             ffprobe_command=fake_ffprobe_args(),
         )
+
+
+def test_convert_to_mp4_rejects_a_truncated_product(source: Path, tmp_path: Path, monkeypatch):
+    """产物标称时长明显偏短时照旧判失败（这里的替身连标称时长也减半）。"""
+    monkeypatch.setenv("LIVERREVIEW_FAKE_FFMPEG_SHAPE", "truncated")
+
+    with pytest.raises(FFmpegError, match="产物可能被截断"):
+        convert_to_mp4(
+            source,
+            tmp_path / "converted.mp4",
+            original_metadata=_metadata(600.0),
+            ffmpeg_command=fake_ffmpeg_args(),
+            ffprobe_command=fake_ffprobe_args(),
+        )
+
+
+def test_convert_to_mp4_still_works_when_timeline_unmeasurable(
+    source: Path, tmp_path: Path, monkeypatch
+):
+    """时间轴统计失败时退回标称时长比对，正常素材不该因此失败。"""
+    monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_MODE", "packets-fail")
+
+    metadata = convert_to_mp4(
+        source,
+        tmp_path / "converted.mp4",
+        original_metadata=_metadata(600.0),
+        ffmpeg_command=fake_ffmpeg_args(),
+        ffprobe_command=fake_ffprobe_args(),
+    )
+
+    assert metadata.duration_seconds == pytest.approx(600.0, abs=0.01)
 
 
 def test_prepare_split_source_skips_conversion_for_mp4(source: Path, tmp_path: Path, monkeypatch):

@@ -6,6 +6,7 @@
 
 from app.media.convert import (
     convert_to_mp4,
+    duration_tolerance,
     is_target_container,
     prepare_split_source,
     validate_converted,
@@ -40,7 +41,14 @@ from app.media.paths import (
     remove_task_media,
     sha256_file,
 )
-from app.media.probe import ProbeError, build_ffprobe_args, probe_file
+from app.media.probe import (
+    DISCONTINUITY_THRESHOLD_SECONDS,
+    ProbeError,
+    TimelineReport,
+    build_ffprobe_args,
+    measure_timeline,
+    probe_file,
+)
 from app.media.split import (
     ClipPlan,
     SplitError,
@@ -54,12 +62,14 @@ from app.media.split import (
 __all__ = [
     "ClipPlan",
     "CoverageIssue",
+    "DISCONTINUITY_THRESHOLD_SECONDS",
     "FFmpegError",
     "MediaMetadata",
     "MediaStream",
     "ProbeError",
     "ProbeParseError",
     "SplitError",
+    "TimelineReport",
     "build_ffmpeg_args",
     "build_ffprobe_args",
     "check_coverage",
@@ -69,12 +79,13 @@ __all__ = [
     "convert_to_mp4",
     "converted_path",
     "cut_clip",
+    "duration_tolerance",
     "has_playable_streams",
     "is_target_container",
     "issues_from_json",
     "issues_to_json",
-    "original_path",
-    "originals_dir",
+    "measure_timeline",
+    "original_path",    "originals_dir",
     "parse_probe_output",
     "plan_clips",
     "plan_initial_clips",
