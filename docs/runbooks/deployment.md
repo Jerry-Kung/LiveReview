@@ -15,7 +15,8 @@
 - 敏感凭据（如 TOS 对象存储 AK/SK）只从环境变量读取，不得写入代码或提交仓库。
 - 服务监听地址与端口通过后端 `.env` 的 `APP_HOST` / `APP_PORT`（默认 `127.0.0.1:12439`）配置；前端 `.env` 的 `VITE_BACKEND_PORT` 需与后端 `APP_PORT` 保持一致。
 - 对象存储通过 `STORAGE_BACKEND` 选择实现：`auto`（默认，凭据齐全用 TOS，否则回落本地 Mock 并记录 warning）、`tos`（强制真实，缺凭据直接报错，测试环境使用）、`mock`（强制本地内存实现）。`TOS_OBJECT_PREFIX` 是对象键的公共前缀（默认 `liverreview/`），`TOS_PRESIGNED_TTL_SECONDS` 是预签名下载链接的默认有效期（秒，默认 3600）。本地未配置 TOS 凭据时不影响启动，存储自动回落 Mock。
-- 上传分片与合并临时文件落在 `MEDIA_ROOT`（本地默认 `./media`，容器内 `/app/media`），`UPLOAD_CHUNK_SIZE` 是下发给前端的分片大小（字节，默认 8MB）。该目录不是用户配置项之外的业务数据，清理它只影响未完成的上传。
+- 上传分片、合并临时文件与待探测的原始视频副本落在 `MEDIA_ROOT`（本地默认 `./media`，容器内 `/app/media`），`UPLOAD_CHUNK_SIZE` 是下发给前端的分片大小（字节，默认 8MB）。该目录不是用户配置项之外的业务数据，清理它只影响未完成的上传。
+- 媒体探测（V0.1.4 起）通过 `FFPROBE_PATH`（可执行文件名或「解释器 + 脚本」形式的 JSON 列表）、`PROBE_TIMEOUT_SECONDS`（默认 300 秒）、`PROBE_MAX_OUTPUT_BYTES`（默认 8MB）配置。本地不部署 FFmpeg，因此本地启动只能验证探测的编排与失败原因，真实探测必须在测试环境执行。
 
 ## 3. 本地运行
 
@@ -131,12 +132,53 @@ print("task:", call("GET", f"/api/tasks/{task_id}")[1])
 PY
 ```
 
-预期：`upload` 返回 200 且带 `object_key`；`task` 的 `status` 为 `succeeded`、`object_key` 与上传返回一致、`size` 等于文件大小。
+预期：`upload` 返回 200 且带 `object_key`；`task` 的 `status` 为 `succeeded`、`object_key` 与上传返回一致、`size` 等于文件大小，且 `metadata` 不为 `null`（V0.1.4 起，探测成功才会有）。
 
-### 排查要点
+上面的脚本用全零字节充当视频，只覆盖「分片落盘 → 合并 → 入库 → 任务流转」；V0.1.4 起探测会接手处理，这类假文件会被判为探测失败（`status=failed`，原因指向无法识别媒体流或缺少音视频流），这属于预期。要用真实素材验证端到端，请上传一场真实 TS 录屏。
+
+### 排查要点（上传与任务）
 
 - **上传失败**：`GET /api/uploads/{upload_id}` 与 `GET /api/tasks/{task_id}` 的 `error` 字段给出原因；服务端存储错误会带 `request_id`，可用它向火山引擎定位。分片仍保留在 `MEDIA_ROOT/chunks/{upload_id}/`，重新提交分片即可继续，不必重传整个文件。
 - **缺片**：完成接口返回 409 且带 `missing_chunks`，按该列表补齐后重新提交完成即可。
 - **任务停在 `uploaded`**：说明后台执行器未推进。检查容器日志有无执行器异常；重启容器会按该状态重新入队（`requeue_pending`）。
 - **磁盘占用**：未完成的上传会占用 `liverreview-media` 卷。确认无人续传后可删除 `MEDIA_ROOT/chunks/` 下对应会话目录。
-- **数据库表结构变更**：表在启动时用 `create_all` 建立，只建缺失的表。升级到新增了表或字段的版本后，需删除 `liverreview-data` 卷中的 SQLite 文件再重启（测试环境数据可重建）。
+
+## 7. 媒体探测（V0.1.4 起）
+
+上传完成后任务自动执行 ffprobe 探测：后端优先使用上传留下的本地副本（`/app/media/originals/{任务 id}{后缀}`），副本缺失时按对象键从 TOS 取回，再写入元数据。探测成功即删除本地副本；探测失败保留副本，便于用同一份文件复现问题。
+
+任务接口的 `metadata` 字段是探测结论（时长、分辨率、帧率、音视频编码、容器、流数、码率、内容 sha256），`probed_at` 非空表示探测成功过。未探测成功的任务该字段为 `null`，前端不展示媒体信息。
+
+### 探测自检与定位（测试环境）
+
+对某个文件或某个任务的本地副本直接跑一遍探测，用于区分「环境/工具问题」与「媒体文件本身的问题」：
+
+```bash
+# 按任务 id 前缀探测其本地副本（副本已清理时提示文件不存在）
+docker compose -f docker/docker-compose.yml exec backend python -m app.media.cli <任务 id 前缀>
+
+# 按文件路径探测（例如容器内可直接读到的一份素材）
+docker compose -f docker/docker-compose.yml exec backend python -m app.media.cli /app/media/originals/<任务 id>.ts
+```
+
+输出逐条打印流信息与摘要；探测失败时打印 ffprobe 给出的原因，进程退出码非 0。元数据抽查核对（时长、分辨率、编码与实际媒体是否一致）也用它。
+
+### 排查要点（探测）
+
+- **任务失败且原因为「未找到 ffprobe」**：镜像内没有 ffmpeg 或 `FFPROBE_PATH` 被改错。确认容器内 `ffprobe -version` 可用。
+- **任务失败且原因为「探测超时」**：`-count_packets` 需要完整读一遍文件，长录屏耗时随之增长。确认 `PROBE_TIMEOUT_SECONDS` 与磁盘读取速度是否足够；必要时先提高超时再排查 IO。
+- **任务失败且原因为「没有音频或视频流」**：探测到的不是可播放的录屏素材，检查上传的文件本身。
+- **任务失败且原因为「本地副本缺失/存储取回失败」**：本地副本已被清理且对象存储取不回。先用 `app.media.cli <任务 id>` 确认副本是否真的不存在，再核对 TOS 中该对象键是否存在（服务端错误会带 `request_id`）。
+- **本地副本占磁盘**：探测失败的任务会保留副本。确认不再复现后，删除 `/app/media/originals/` 下对应文件即可；删除任务会一并清理副本。
+- **任务停在 `processing`**：进程重启后这类任务会在启动时自动退回 `uploaded` 并重新入队（`reclaim_stale_processing`）。若反复出现，检查容器是否被 OOM 杀掉。
+
+## 8. 表结构变更与升级
+
+表在启动时用 `create_all` 建立，只建缺失的表、不改已存在的表。升级到新增了表或字段的版本后，必须先删除 `liverreview-data` 卷中的 SQLite 文件再重启，否则新字段不会生效——查询会直接报 `no such column`：
+
+```bash
+docker compose -f docker/docker-compose.yml exec backend python -c "import pathlib; p=pathlib.Path('/app/data/liverreview.db'); p.unlink(missing_ok=True); print('数据库文件已删除，重启后重建')"
+docker compose -f docker/docker-compose.yml restart backend
+```
+
+删除数据库会一并丢掉历史任务与探测结果（对象存储中的原始视频不受影响，但记录与对象的对应关系会丢失，需要重新上传）。V0.1.4 新增了探测相关字段，从 V0.1.3 升级时必须执行本步骤。
