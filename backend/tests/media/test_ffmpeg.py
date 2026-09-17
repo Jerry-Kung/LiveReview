@@ -13,6 +13,7 @@ import pytest
 
 from app.media.convert import (
     REMUX_ARGS,
+    REMUX_INPUT_ARGS,
     convert_to_mp4,
     is_target_container,
     prepare_split_source,
@@ -22,6 +23,7 @@ from app.media.ffmpeg import FFmpegError, build_ffmpeg_args, run_ffmpeg
 from app.media.ffprobe import MediaMetadata, MediaStream
 from app.media.split import (
     CLIP_ARGS_TEMPLATE,
+    CLIP_INPUT_ARGS_TEMPLATE,
     ClipPlan,
     SplitError,
     cut_clip,
@@ -80,6 +82,19 @@ def test_build_ffmpeg_args_puts_globals_first_and_io_last():
     assert args.index("-i") < args.index("out.mp4")
 
 
+def test_build_ffmpeg_args_places_input_args_before_input_file():
+    """输入选项必须落在 `-i` 之前：ffmpeg 只把它作用于紧随其后的那个文件。"""
+    args = build_ffmpeg_args(
+        "ffmpeg",
+        source="in.ts",
+        output="out.mp4",
+        input_args=("-fflags", "+genpts"),
+        extra_args=("-c", "copy"),
+    )
+    assert args.index("+genpts") < args.index("-i")
+    assert args.index("-i") < args.index("-c")
+
+
 def test_build_ffmpeg_args_accepts_interpreter_plus_script():
     args = build_ffmpeg_args([sys.executable, "fake.py"], source="a", output="b")
     assert args[:2] == [sys.executable, "fake.py"]
@@ -96,18 +111,53 @@ def test_remux_args_keep_all_audio_and_copy_without_reencoding():
     assert "0:v" in REMUX_ARGS
     assert "0:a?" in REMUX_ARGS
     assert REMUX_ARGS[REMUX_ARGS.index("-c") + 1] == "copy"
-    assert "+genpts" in REMUX_ARGS
     assert "+faststart" in REMUX_ARGS
+    # genpts 是解复用阶段的选项，必须在输入侧，否则 ffmpeg 直接拒绝执行
+    assert "+genpts" in REMUX_INPUT_ARGS
+
+
+def test_remux_put_audio_and_mapping_after_the_input_file():
+    """回归用例：`-map` 曾是输入侧的选项，真实 ffmpeg 报
+    「Option map cannot be applied to input url」并让整个任务失败。"""
+    args = build_ffmpeg_args(
+        "ffmpeg",
+        source="live.ts",
+        output="converted.mp4",
+        input_args=REMUX_INPUT_ARGS,
+        extra_args=REMUX_ARGS,
+    )
+    assert args.index("-i") < args.index("-map")
+    assert args.index("-i") < args.index("-c")
+    assert args.index("-i") < args.index("-movflags")
+    # 输入侧只留 genpts 这类解复用选项
+    assert args.index("+genpts") < args.index("-i")
 
 
 def test_clip_args_cut_by_time_and_keep_audio():
     args = ClipPlan(index=2, start_seconds=120.5, end_seconds=300.0).to_args()
-    assert args[args.index("-ss") + 1] == "120.500"
     assert args[args.index("-to") + 1] == "300.000"
     # 保留全部音视频流，且不重编码
     assert "0:v" in args and "0:a?" in args
     assert args[args.index("-c") + 1] == "copy"
-    assert CLIP_ARGS_TEMPLATE.count("{start}") == 1
+    assert CLIP_ARGS_TEMPLATE.count("{start}") == 0
+
+
+def test_clip_seek_goes_before_input_and_stop_after_input():
+    """`-ss` 放输入侧是快速定位，`-to`/流映射属输出侧；错位会让切分直接失败。"""
+    planned = ClipPlan(index=2, start_seconds=120.5, end_seconds=300.0)
+    args = build_ffmpeg_args(
+        "ffmpeg",
+        source="converted.mp4",
+        output="clip_002.mp4",
+        input_args=planned.to_input_args(),
+        extra_args=planned.to_args(),
+    )
+    assert args.index("-ss") < args.index("-i")
+    assert args[args.index("-ss") + 1] == "120.500"
+    assert args.index("-i") < args.index("-to")
+    assert args[args.index("-to") + 1] == "300.000"
+    assert CLIP_INPUT_ARGS_TEMPLATE.count("{end}") == 0
+    assert CLIP_ARGS_TEMPLATE.count("{start}") == 0
 
 
 # —— 容器判定 ——
@@ -209,6 +259,31 @@ def test_run_ffmpeg_fails_when_no_product_written(source: Path, tmp_path: Path, 
 def test_run_ffmpeg_reports_missing_source(tmp_path: Path):
     with pytest.raises(FFmpegError, match="不存在或不是普通文件"):
         run_ffmpeg(fake_ffmpeg_args(), source=tmp_path / "absent.ts", output=tmp_path / "o.mp4")
+
+
+def test_fake_ffmpeg_rejects_output_option_before_input(source: Path, tmp_path: Path):
+    """替身也必须拦住错位的参数。
+
+    回归用例：真实 ffmpeg 报「Option map cannot be applied to input url」，
+    而最早那版替身对参数顺序照单全收，导致本地测试全绿、测试环境才炸。
+    """
+    with pytest.raises(FFmpegError, match="cannot be applied to input"):
+        run_ffmpeg(
+            fake_ffmpeg_args(),
+            source=source,
+            output=tmp_path / "out.mp4",
+            input_args=("-map", "0:v", "-c", "copy"),
+        )
+
+
+def test_fake_ffmpeg_rejects_input_option_after_input(source: Path, tmp_path: Path):
+    with pytest.raises(FFmpegError, match="move this option before the file"):
+        run_ffmpeg(
+            fake_ffmpeg_args(),
+            source=source,
+            output=tmp_path / "out.mp4",
+            extra_args=("-fflags", "+genpts"),
+        )
 
 
 def test_run_ffmpeg_times_out(source: Path, tmp_path: Path, monkeypatch):

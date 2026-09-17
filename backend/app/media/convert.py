@@ -25,9 +25,19 @@ DURATION_TOLERANCE_SECONDS = 1.0
 DURATION_TOLERANCE_RATIO = 0.005
 
 # 参数：只换容器，不改编码，丢弃数据流之外的附加轨道（如 TS 里的数据/字幕流）
-REMUX_ARGS: tuple[str, ...] = (
+#
+# 输入侧与输出侧必须分开：ffmpeg 的选项只作用于紧随其后的那个文件，写错位置会直接报
+# 「Option map cannot be applied to input url」——V0.1.5 首次在测试环境跑真实 ffmpeg
+# 时正是这样失败的。输入侧放解复用选项，输出侧放流映射与封装选项。
+REMUX_INPUT_ARGS: tuple[str, ...] = (
     "-v",
     "error",
+    # TS 常带时间戳断层，在解复用阶段补生成 PTS，避免产物时间轴不连续导致音画错位
+    "-fflags",
+    "+genpts",
+)
+
+REMUX_ARGS: tuple[str, ...] = (
     # 保留全部音视频流：音频是复盘的核心信息，转封装绝不主动丢流
     "-map",
     "0:v",
@@ -35,9 +45,6 @@ REMUX_ARGS: tuple[str, ...] = (
     "0:a?",
     "-c",
     "copy",
-    # TS 常带时间戳断层，补生成 PTS 让 MP4 的时间轴连续，避免音画错位
-    "-fflags",
-    "+genpts",
     "-avoid_negative_ts",
     "make_zero",
     # faststart 把索引前置，前端 <video> 不必下载整个文件就能起播
@@ -106,6 +113,7 @@ def convert_to_mp4(
         ffmpeg_command,
         source=source,
         output=output,
+        input_args=REMUX_INPUT_ARGS,
         extra_args=REMUX_ARGS,
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,

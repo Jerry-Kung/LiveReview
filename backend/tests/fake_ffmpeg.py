@@ -37,6 +37,42 @@ DEFAULT_SOURCE_DURATION = 600.0
 
 SIDECAR_SUFFIX = ".fakemeta.json"
 
+# 本项目用到的 ffmpeg 选项按位置分类。这个分类存在的意义就是「位置错就报错」：
+# 替身若对参数顺序照单全收，`-map` 写到 `-i` 之前这种错误在本地测试里就查不出来，
+# 只能等真实 ffmpeg 在测试环境报错（V0.1.5 正是这样暴露的）。
+GLOBAL_OPTIONS = frozenset({"-hide_banner", "-nostdin", "-v", "-loglevel", "-y", "-n"})
+# `-ss` 与 `-to` 两侧都合法（含义不同），因此不参与位置校验：替身只拦真正会失败的错位
+INPUT_OPTIONS = frozenset({"-fflags", "-f", "-probesize", "-analyzeduration"})
+OUTPUT_OPTIONS = frozenset({"-map", "-c", "-codec", "-movflags", "-avoid_negative_ts", "-an", "-vn"})
+# 带参数值的选项：解析时需连同其取值一起跳过
+OPTIONS_WITH_VALUE = GLOBAL_OPTIONS | INPUT_OPTIONS | OUTPUT_OPTIONS | {"-ss", "-to"}
+
+
+def _validate_option_placement(args: list[str]) -> str | None:
+    """按位置校验选项，返回错误文本（参数合法时返回 None）。
+
+    与真实 ffmpeg 一致：选项只作用于紧随其后的那个文件，输入选项出现在 `-i` 之后、
+    输出选项出现在 `-i` 之前都会被拒绝执行。
+    """
+    seen_input = False
+    for token in args:
+        if token == "-i":
+            seen_input = True
+            continue
+        if token not in OPTIONS_WITH_VALUE:
+            continue
+        if token in OUTPUT_OPTIONS and not seen_input:
+            return (
+                f"Option {token.lstrip('-')} cannot be applied to input url {args[-1]} -- "
+                "you are trying to apply an input option to an output file or vice versa"
+            )
+        if token in INPUT_OPTIONS and seen_input:
+            return (
+                f"Option {token.lstrip('-')} (set input option) cannot be applied to output file "
+                f"{args[-1]}: move this option before the file it belongs to"
+            )
+    return None
+
 
 def _parse_args(args: list[str]) -> dict:
     info: dict = {"args": args, "source": None, "output": None, "ss": None, "to": None}
@@ -112,6 +148,12 @@ def main() -> int:
     if log_path:
         with Path(log_path).open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(info, ensure_ascii=False) + "\n")
+
+    placement_error = _validate_option_placement(args)
+    if placement_error:
+        # 与真实 ffmpeg 一致：参数位置错误时以非零码失败并把原因写到 stderr
+        sys.stderr.write(f"{placement_error}\n")
+        return 1
 
     mode = os.environ.get("LIVERREVIEW_FAKE_FFMPEG_MODE", "")
 

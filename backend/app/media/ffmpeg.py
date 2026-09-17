@@ -41,18 +41,26 @@ def build_ffmpeg_args(
     *,
     source: str | Path,
     output: str | Path,
+    input_args: Sequence[str] = (),
     extra_args: Sequence[str] = (),
     overwrite: bool = True,
 ) -> list[str]:
-    """构造 ffmpeg 参数：全局开关在前，输入与输出在最后。
+    """构造 ffmpeg 参数：全局开关 → 输入选项 → 输入 → 输出选项 → 输出。
 
-    `-nostdin` 防止 ffmpeg 从父进程的标准输入读取交互命令；`-map 0` 由调用方通过
-    `extra_args` 传入，本函数只负责拼装顺序，不替切分/转封装决定流映射策略。
+    ffmpeg 的位置敏感是这条命令最容易踩的坑：选项只作用于「紧随其后的那个文件」，
+    输入选项写到 `-i` 之后会被当成输出选项，反之亦然。混放会直接以
+    `Option map ... cannot be applied to input url` 之类的原因失败——因此这里把
+    输入侧与输出侧显式分开，调用方按 ffmpeg 的语义各归其位：
+
+    - `input_args`：作用于输入的解复用选项（如 `-ss` 快速定位、`-fflags +genpts`）；
+    - `extra_args`：作用于输出的选项（如 `-map`、`-c copy`、`-movflags`）。
+
+    `-nostdin` 防止 ffmpeg 从父进程的标准输入读取交互命令。
     """
     args = [*command_prefix(ffmpeg_command), "-hide_banner", "-nostdin"]
     if overwrite:
         args.append("-y")
-    args += [*extra_args, "-i", str(source), str(output)]
+    args += [*input_args, "-i", str(source), *extra_args, str(output)]
     return args
 
 
@@ -82,6 +90,7 @@ def run_ffmpeg(
     *,
     source: str | Path,
     output: str | Path,
+    input_args: Sequence[str] = (),
     extra_args: Sequence[str] = (),
     timeout_seconds: int = 600,
     max_output_bytes: int = 8 * 1024 * 1024,
@@ -95,6 +104,9 @@ def run_ffmpeg(
     产物体积不由本函数判断：「多大算正常」取决于源文件与切片参数，与 ffmpeg 的日志长度
     无关；体积约束由切分层用配置的上限校验（见 `split.validate_clip`）。
     `max_output_bytes` 限制的是收集回来的 stderr 长度，避免异常输入把日志撑爆内存。
+
+    `input_args` 与 `extra_args` 的区别见 `build_ffmpeg_args`：前者是输入侧选项，
+    后者是输出侧选项，写错位置 ffmpeg 会直接拒绝执行。
     """
     source_path = Path(source)
     if not source_path.is_file():
@@ -106,7 +118,11 @@ def run_ffmpeg(
     _precheck_command(ffmpeg_command)
 
     args = build_ffmpeg_args(
-        ffmpeg_command, source=source_path, output=output_path, extra_args=extra_args
+        ffmpeg_command,
+        source=source_path,
+        output=output_path,
+        input_args=input_args,
+        extra_args=extra_args,
     )
     logger.info("ffmpeg 调用：%s", " ".join(args))
     try:

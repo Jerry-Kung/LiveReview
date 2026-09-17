@@ -27,12 +27,19 @@ _TIME_PRECISION = 1000
 # 单片产物时长容差：-c copy 的切点必须落在关键帧上，实际长度与计划值的偏差由此而来
 CLIP_DURATION_SLACK_SECONDS = 5.0
 
-# 单片切分参数：只换容器不改编码，与转封装保持同一套「不重编码、不丢音频」的约定
-CLIP_ARGS_TEMPLATE: tuple[str, ...] = (
+# 单片切分参数：只换容器不改编码，与转封装保持同一套「不重编码、不丢音频」的约定。
+#
+# 输入侧与输出侧分开：`-ss` 写在 `-i` 之前是快速定位（直接跳到目标位置的关键帧附近，
+# GB 级文件不必先解复用整段），`-to` 与流映射属输出侧。写错位置 ffmpeg 会直接拒绝执行。
+CLIP_INPUT_ARGS_TEMPLATE: tuple[str, ...] = (
     "-v",
     "error",
     "-ss",
     "{start}",
+)
+
+CLIP_ARGS_TEMPLATE: tuple[str, ...] = (
+    # -to 以输入时间轴为基准，与 -ss 组合即 [start, end) 区间
     "-to",
     "{end}",
     "-map",
@@ -69,16 +76,27 @@ class ClipPlan:
     def duration_seconds(self) -> float:
         return self.end_seconds - self.start_seconds
 
+    def to_input_args(self) -> list[str]:
+        """输入侧参数（`-i` 之前）：快速定位到片段起点。"""
+        return _fill(CLIP_INPUT_ARGS_TEMPLATE, self)
+
     def to_args(self) -> list[str]:
-        args = list(CLIP_ARGS_TEMPLATE)
-        args[args.index("{start}")] = _format_time(self.start_seconds)
-        args[args.index("{end}")] = _format_time(self.end_seconds)
-        return args
+        """输出侧参数（`-i` 之后）：截到片段终点并按流复制封装为 MP4。"""
+        return _fill(CLIP_ARGS_TEMPLATE, self)
 
 
 def _format_time(seconds: float) -> str:
     """按毫秒精度格式化时间点；ffmpeg 接受十进制秒。"""
     return f"{max(0.0, seconds):.3f}"
+
+
+def _fill(template: Sequence[str], clip: "ClipPlan") -> list[str]:
+    """把模板里的 `{start}` / `{end}` 占位换成该片段的时间点；未出现的占位原样跳过。"""
+    replacements = {
+        "{start}": _format_time(clip.start_seconds),
+        "{end}": _format_time(clip.end_seconds),
+    }
+    return [replacements.get(token, token) for token in template]
 
 
 def _round_time(seconds: float) -> float:
@@ -296,6 +314,7 @@ def cut_clip(
         ffmpeg_command,
         source=source,
         output=output,
+        input_args=planned.to_input_args(),
         extra_args=planned.to_args(),
         timeout_seconds=timeout_seconds,
     )
