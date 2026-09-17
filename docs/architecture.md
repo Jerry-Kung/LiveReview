@@ -11,19 +11,19 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 
 - **`backend/app/config.py`**：统一的配置入口，所有环境差异（服务地址、数据库、对象存储凭据、媒体工具路径、本地产物目录）通过环境变量注入，凭据类字段无默认值。
 - **`backend/app/database.py`**：SQLAlchemy 引擎、会话工厂与建表入口（`init_db`）。表结构在应用启动时用 `create_all` 建立，不引入迁移工具。
-- **`backend/app/models.py`**：业务表结构声明（`UploadSession` 上传会话、`Task` 处理任务）。
+- **`backend/app/models.py`**：业务表结构声明（`UploadSession` 上传会话、`Task` 处理任务、`MediaClip` 切片记录）。
 - **`backend/app/chunks.py`**：上传分片的落盘、合并与清理，只处理本地文件，不感知 HTTP 与数据库。
 - **`backend/app/tasks/`**：后台任务执行器（进程内线程池）与任务状态流转，详见下节。
-- **`backend/app/media/`**：媒体探测（ffprobe）的调用、输出解析与本地产物路径约定；只依赖配置与标准库，不感知数据库、HTTP 与对象存储。
+- **`backend/app/media/`**：媒体处理（ffprobe 探测、ffmpeg 转封装与切分、覆盖校验）的调用、解析与本地产物路径约定；只依赖配置与标准库，不感知数据库、HTTP 与对象存储。
 - **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针，`uploads.py` 与 `tasks.py` 面向前端（统一 `/api` 前缀）。
 - **`backend/app/storage/`**：对象存储的契约与实现，详见下节。
-- **`frontend/src/`**：React SPA。`App.tsx` 负责两屏切换（上传录屏 / 服务状态），`UploadPanel.tsx` 承载分片上传、任务状态与探测结论，`api.ts` 对应后端接口契约。
+- **`frontend/src/`**：React SPA。`App.tsx` 负责两屏切换（上传录屏 / 服务状态），`UploadPanel.tsx` 承载分片上传、任务状态、探测结论与切片列表，`api.ts` 对应后端接口契约。
 
 ## 本地产物
 
 - **根目录**：`MEDIA_ROOT`（本地 `./media`，容器 `/app/media`，测试环境挂 `liverreview-media` 卷）。
-- **约定**：`chunks/{上传会话 id}/{序号:06d}.part` 存分片，`assembling/{上传会话 id}.part` 存合并临时文件，`originals/{任务 id}{后缀}` 存合并后待探测的原始视频副本。
-- **生命周期**：合并产物上传对象存储成功后转存为 `originals/` 下的副本；探测成功即删除副本，探测失败保留以便在容器内复跑 ffprobe；重试时副本缺失则按对象键从对象存储取回同一路径。分片与临时文件在对象就位后清理，入库失败只清合并临时文件、保留分片，使用户无需重传整个 1～2GB 原文件。
+- **约定**：`chunks/{上传会话 id}/{序号:06d}.part` 存分片，`assembling/{上传会话 id}.part` 存合并临时文件，`originals/{任务 id}{后缀}` 存合并后待处理的原始视频副本，`converted/{任务 id}.mp4` 存转封装产物，`clips/{任务 id}/clip_{序号:03d}.mp4` 存切片产物（序号补零使目录列表顺序等于时间顺序）。
+- **生命周期**：合并产物上传对象存储成功后转存为 `originals/` 下的副本；副本供探测与切分使用，处理成功即删除，失败保留以便在容器内复跑工具复现；重试时副本缺失则按对象键从对象存储取回同一路径。切片产物在上传对象存储成功后立即删除，避免 GB 级片段长期占盘。分片与临时文件在对象就位后清理，入库失败只清合并临时文件、保留分片，使用户无需重传整个 1～2GB 原文件。
 - **不入仓库**：产物目录由 `.gitignore` 与 `.dockerignore` 排除。
 
 ## 分层与数据流
@@ -32,15 +32,16 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 
 上传链路（V0.1.3 起）：前端按后端下发的分片大小切片，逐片 `PUT` 到后端；后端落盘到 `MEDIA_ROOT`，收齐后顺序合并、校验总大小、上传对象存储，随后建立任务并交给后台执行器。上传进度由分片请求驱动，任务进度由前端轮询任务接口获得，两者分开呈现。
 
-媒体探测链路（V0.1.4 起）：任务被认领后，先取本地副本（缺失则从对象存储回下载），用 ffprobe 探测并把元数据写入任务行，最后删除本地副本。失败原因落库于任务的 `error` 字段。
+媒体处理链路（V0.1.4 起探测，V0.1.5 起切分）：任务被认领后，先取本地副本（缺失则从对象存储回下载）→ 用 ffprobe 探测并把元数据写入任务行 → 非 MP4 容器转封装为 MP4（`converted/`）→ 按「时长 + 体积」双约束切分为 MP4 片段 → 逐片上传对象存储并删除本地片段文件 → 整场覆盖校验 → 清理本地副本与转封装产物。失败原因落库于任务的 `error` 字段，覆盖校验问题落在 `coverage_issues_json`。
 
 ## 后台任务
 
-- **职责**：承接上传完成后的处理步骤（V0.1.4 探测已接入、V0.1.5 切分待接入），并保证「关闭页面不影响后台执行」。
+- **职责**：承接上传完成后的处理步骤（V0.1.4 探测、V0.1.5 转封装与切分已接入），并保证「关闭页面不影响后台执行」。
 - **实现**：`backend/app/tasks/` 下的进程内 `ThreadPoolExecutor`，单实例部署下有效；任务状态全部落库，进程重启时先把残留的 `processing` 任务退回 `uploaded`（内存态认领凭据已失效），再把 `uploaded` 的任务重新入队。
 - **状态机**：`uploading` → `uploaded` → `processing` → `succeeded` / `failed`。执行器用带条件的 UPDATE 认领任务（`process_token` 为认领判据），并发下只有一个执行器能认领成功，避免重复执行。
-- **探测阶段**：任务体用 ffprobe 探测原始视频，常用元数据升为任务表的列（时长、分辨率、编码、码率、流数），完整 ffprobe 输出存 `metadata_json`，内容 sha256 存 `content_hash`。时间基准（`duration_seconds`）是 V0.1.5 切分的依据。
-- **失败可见**：失败原因写入任务与上传会话的 `error` 字段，接口原样返回；服务端存储错误带上 `request_id`。已入库的失败任务可经重试接口重新入队（重试前清空上一次的探测结果），未入库的失败应重新发起上传而非重试任务。
+- **探测阶段**：任务体用 ffprobe 探测原始视频，常用元数据升为任务表的列（时长、分辨率、编码、码率、流数），完整 ffprobe 输出存 `metadata_json`，内容 sha256 存 `content_hash`。时间基准（`duration_seconds`）是切分的依据。
+- **切分阶段**：切分输入可能是转封装产物而非原始视频，其容器与时长单独记录在 `split_source_format` / `split_source_duration_seconds`——覆盖校验必须按切分输入的时长判断，而不是原始文件的时长。切片逐条落在 `media_clips` 表（序号、起止秒、实测时长与体积、对象键、状态），序号即时间轴顺序，重试按序号复用已上传的片段。
+- **失败可见**：失败原因写入任务与上传会话的 `error` 字段，接口原样返回；服务端存储错误带上 `request_id`。已入库的失败任务可经重试接口重新入队（重试前清空探测结论与覆盖结论，片段行保留以复用已上传产物），未入库的失败应重新发起上传而非重试任务。
 
 ## 对象存储
 
@@ -55,7 +56,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 
 - **火山引擎 TOS**：对象存储服务商，通过官方 SDK 接入，仅测试环境具备真实凭据。
 - **SQLite**：V0 阶段的业务存储，通过 SQLAlchemy 接入；数据库产品的长期选型见 `README.md` 第 5 节，随业务量演进重新评估。
-- **FFmpeg / ffprobe**：媒体探测与转码工具，V0.1.4 起由探测模块通过命令行调用，只在测试环境（Docker 镜像）安装，本地不部署；工具路径与探测超时、输出上限通过 `FFPROBE_PATH` / `PROBE_TIMEOUT_SECONDS` / `PROBE_MAX_OUTPUT_BYTES` 配置。
+- **FFmpeg / ffprobe**：媒体探测、转封装与切分工具，V0.1.4 起由 `backend/app/media/` 通过命令行调用，只在测试环境（Docker 镜像）安装，本地不部署；工具路径通过 `FFPROBE_PATH` / `FFMPEG_PATH`（可执行文件名，或「解释器 + 脚本」形式的 JSON 列表）配置，超时与输出上限通过 `PROBE_TIMEOUT_SECONDS` / `PROBE_MAX_OUTPUT_BYTES` / `SPLIT_TIMEOUT_SECONDS` / `FFMPEG_MAX_OUTPUT_BYTES` 配置。转封装与切分全程 `-c copy` 不重编码，并始终保留音视频流（`-map 0:v -map 0:a?`）。
 
 ## 关键技术约束
 

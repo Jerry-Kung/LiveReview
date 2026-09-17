@@ -28,6 +28,12 @@ def fake_ffprobe_args() -> list[str]:
     return [sys.executable, str(script)]
 
 
+def fake_ffmpeg_args() -> list[str]:
+    """假 ffmpeg 的命令行前缀：覆盖转封装与切分的编排，不涉及真实编解码。"""
+    script = Path(__file__).with_name("fake_ffmpeg.py")
+    return [sys.executable, str(script)]
+
+
 @pytest.fixture
 def db_session_factory(tmp_path: Path):
     """文件型 SQLite：后台执行线程需要看到接口线程已提交的数据。"""
@@ -49,12 +55,13 @@ def media_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def test_settings(media_root: Path) -> Settings:
     # _env_file=None：不读本机 .env，避免本地凭据影响测试结果
-    # ffprobe 指向假实现：本机不部署 FFmpeg，但探测链路仍需被完整覆盖
+    # ffprobe/ffmpeg 指向假实现：本机不部署 FFmpeg，但处理链路仍需被完整覆盖
     return Settings(
         _env_file=None,
         media_root=str(media_root),
         upload_chunk_size=CHUNK_SIZE,
         ffprobe_path=fake_ffprobe_args(),
+        ffmpeg_path=fake_ffmpeg_args(),
     )
 
 

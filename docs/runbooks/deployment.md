@@ -15,8 +15,9 @@
 - 敏感凭据（如 TOS 对象存储 AK/SK）只从环境变量读取，不得写入代码或提交仓库。
 - 服务监听地址与端口通过后端 `.env` 的 `APP_HOST` / `APP_PORT`（默认 `127.0.0.1:12439`）配置；前端 `.env` 的 `VITE_BACKEND_PORT` 需与后端 `APP_PORT` 保持一致。
 - 对象存储通过 `STORAGE_BACKEND` 选择实现：`auto`（默认，凭据齐全用 TOS，否则回落本地 Mock 并记录 warning）、`tos`（强制真实，缺凭据直接报错，测试环境使用）、`mock`（强制本地内存实现）。`TOS_OBJECT_PREFIX` 是对象键的公共前缀（默认 `liverreview/`），`TOS_PRESIGNED_TTL_SECONDS` 是预签名下载链接的默认有效期（秒，默认 3600）。本地未配置 TOS 凭据时不影响启动，存储自动回落 Mock。
-- 上传分片、合并临时文件与待探测的原始视频副本落在 `MEDIA_ROOT`（本地默认 `./media`，容器内 `/app/media`），`UPLOAD_CHUNK_SIZE` 是下发给前端的分片大小（字节，默认 8MB）。该目录不是用户配置项之外的业务数据，清理它只影响未完成的上传。
+- 上传分片、合并临时文件、原始视频副本与切分中间产物落在 `MEDIA_ROOT`（本地默认 `./media`，容器内 `/app/media`），`UPLOAD_CHUNK_SIZE` 是下发给前端的分片大小（字节，默认 8MB）。该目录不是用户配置项之外的业务数据，清理它只影响未完成的上传与未完成切分的中间产物。
 - 媒体探测（V0.1.4 起）通过 `FFPROBE_PATH`（可执行文件名或「解释器 + 脚本」形式的 JSON 列表）、`PROBE_TIMEOUT_SECONDS`（默认 300 秒）、`PROBE_MAX_OUTPUT_BYTES`（默认 8MB）配置。本地不部署 FFmpeg，因此本地启动只能验证探测的编排与失败原因，真实探测必须在测试环境执行。
+- 预处理与切分（V0.1.5 起）通过 `FFMPEG_PATH`（形式同 `FFPROBE_PATH`）、`SPLIT_MAX_DURATION_SECONDS`（单片最长时长，默认 3600 秒）、`SPLIT_MAX_CLIP_BYTES`（单片最大体积，默认 `1073741824` 即 1GiB）、`SPLIT_MIN_CLIP_SECONDS`（体积超限时递归对半的下限，默认 1 秒）、`SPLIT_TIMEOUT_SECONDS`（单次转封装/切片调用超时，默认 600 秒）、`FFMPEG_MAX_OUTPUT_BYTES`（ffmpeg stderr 收集上限，默认 8MB）配置。**`SPLIT_MAX_DURATION_SECONDS` 与 `SPLIT_MAX_CLIP_BYTES` 是硬约束**：调小它们会让片段更多、切分更慢，调大则可能超过后续识别环节的输入限制。
 
 ## 3. 本地运行
 
@@ -145,7 +146,7 @@ PY
 
 ## 7. 媒体探测（V0.1.4 起）
 
-上传完成后任务自动执行 ffprobe 探测：后端优先使用上传留下的本地副本（`/app/media/originals/{任务 id}{后缀}`），副本缺失时按对象键从 TOS 取回，再写入元数据。探测成功即删除本地副本；探测失败保留副本，便于用同一份文件复现问题。
+上传完成后任务自动执行 ffprobe 探测：后端优先使用上传留下的本地副本（`/app/media/originals/{任务 id}{后缀}`），副本缺失时按对象键从 TOS 取回，再写入元数据。**探测成功后本地副本不再删除**（V0.1.5 起）：紧接着的转封装与切分要用它，删掉就得先花几十分钟从 TOS 取回 2GB 文件。副本与转封装产物在切分成功后一并释放；任一步失败则保留，便于用同一份文件复现问题。
 
 任务接口的 `metadata` 字段是探测结论（时长、分辨率、帧率、音视频编码、容器、流数、码率、内容 sha256），`probed_at` 非空表示探测成功过。未探测成功的任务该字段为 `null`，前端不展示媒体信息。
 
@@ -169,8 +170,45 @@ docker compose -f docker/docker-compose.yml exec backend python -m app.media.cli
 - **任务失败且原因为「探测超时」**：`-count_packets` 需要完整读一遍文件，长录屏耗时随之增长。确认 `PROBE_TIMEOUT_SECONDS` 与磁盘读取速度是否足够；必要时先提高超时再排查 IO。
 - **任务失败且原因为「没有音频或视频流」**：探测到的不是可播放的录屏素材，检查上传的文件本身。
 - **任务失败且原因为「本地副本缺失/存储取回失败」**：本地副本已被清理且对象存储取不回。先用 `app.media.cli <任务 id>` 确认副本是否真的不存在，再核对 TOS 中该对象键是否存在（服务端错误会带 `request_id`）。
-- **本地副本占磁盘**：探测失败的任务会保留副本。确认不再复现后，删除 `/app/media/originals/` 下对应文件即可；删除任务会一并清理副本。
+- **本地副本占磁盘**：处理失败的任务会保留副本与转封装产物。确认不再复现后，删除 `/app/media/originals/` 与 `/app/media/converted/` 下对应文件即可；删除任务会一并清理。
 - **任务停在 `processing`**：进程重启后这类任务会在启动时自动退回 `uploaded` 并重新入队（`reclaim_stale_processing`）。若反复出现，检查容器是否被 OOM 杀掉。
+
+## 7.1 预处理与切分（V0.1.5 起）
+
+探测成功后任务继续执行：**转封装为 MP4**（源已是 MP4 则跳过）→ 按「时长 + 体积」双约束**切分**→ 逐片**上传**到 TOS `clip/` 前缀 → **整场覆盖校验**→ 清理本地产物。全程 `-c copy` 不重编码，且始终带 `-map 0:v -map 0:a?`，音频不会被丢掉。
+
+任务接口的 `clips` 字段按序号（即原视频时间顺序）列出片段，含时间区间、实测时长、体积、状态与预签名下载地址；`coverage` 字段是覆盖校验结论，`checked_at` 非空表示已校验过，`issues` 为空数组表示通过。**覆盖校验发现问题时任务判失败**，问题逐条写在 `coverage.issues` 与任务 `error` 中（例如「第 1 片与第 2 片之间缺失 37.5s」）。
+
+处理过程中本地会同时存在：原始副本、转封装产物（`converted/{任务 id}.mp4`）与切片产物（`clips/{任务 id}/clip_NNN.mp4`，上传成功后即删）。峰值磁盘约为原视频的 2～3 倍，按 2GB 素材预留 6GB 以上。
+
+### 切分自检与定位（测试环境）
+
+```bash
+# 看某任务的处理进度与片段结论
+docker compose -f docker/docker-compose.yml exec backend python - <<'PY'
+import json, urllib.request
+task = json.load(urllib.request.urlopen("http://localhost:12439/api/tasks/<任务 id>"))
+print("状态", task["status"], "进度", task["progress"], "失败原因", task["error"])
+print("切片数", len(task["clips"]), "覆盖校验", task["coverage"])
+for clip in task["clips"]:
+    print(clip["index"], clip["start_seconds"], clip["end_seconds"], clip["size_bytes"], clip["status"])
+PY
+
+# 直接核对容器内某个片段的音视频流与时长（副本/片段已清理时提示文件不存在）
+docker compose -f docker/docker-compose.yml exec backend python -m app.media.cli /app/media/clips/<任务 id>/clip_000.mp4
+```
+
+抽查要点：**片段确实有音频流**（`app.media.cli` 输出里能看到 audio 流）、时长与接口给出的区间一致、体积不超过 `SPLIT_MAX_CLIP_BYTES`、序号与时间区间递增且首尾相接。
+
+### 排查要点（切分）
+
+- **任务失败且原因为「未找到 ffmpeg」**：容器内 `ffmpeg -version` 不可用或 `FFMPEG_PATH` 被改错。
+- **任务失败且原因为「转封装产物时长与原始视频偏差过大」**：源素材时间戳异常，转封装后时长被截断。这是自动判失败而非静默降级——先确认源文件本身是否完整（`app.media.cli` 直接探测原始副本），再决定是否需要人工处理素材。
+- **任务失败且原因为「丢失了声音」**：转封装或切分产物缺音频流，源素材可能是纯视频。先探测原始副本确认它到底有没有音频流。
+- **任务失败且原因为「片段体积超过上限…无法在满足体积约束的同时保留可用片段」**：`SPLIT_MAX_CLIP_BYTES` 相对素材码率过小，或 `SPLIT_MIN_CLIP_SECONDS` 设置过大。按素材调整这两个值后重试。
+- **任务失败且原因为「覆盖校验发现 N 处问题」**：片段之间存在缺口、重叠或首尾未覆盖。问题信息里给出了具体的秒数与相邻片段序号；调大 `SPLIT_MAX_DURATION_SECONDS` 减少交界数量常能规避由关键帧对齐引起的边界偏差。
+- **重试会不会重传已有片段**：不会。已成功上传的片段按序号复用、对象键不变，重试只补齐未完成的部分。若调整了切分参数导致片段区间变化，旧片段的对象会被删除并重新切分上传。
+- **对象存储里只有片段、没有转封装产物**：符合预期。转封装产物是容器内的中间态，只有切分后的 MP4 片段会上传到 `clip/` 前缀下。
 
 ## 8. 表结构变更与升级
 
@@ -181,4 +219,6 @@ docker compose -f docker/docker-compose.yml exec backend python -c "import pathl
 docker compose -f docker/docker-compose.yml restart backend
 ```
 
-删除数据库会一并丢掉历史任务与探测结果（对象存储中的原始视频不受影响，但记录与对象的对应关系会丢失，需要重新上传）。V0.1.4 新增了探测相关字段，从 V0.1.3 升级时必须执行本步骤。
+删除数据库会一并丢掉历史任务与探测结果（对象存储中的原始视频不受影响，但记录与对象的对应关系会丢失，需要重新上传）。**V0.1.5 新增了 `media_clips` 表与 `tasks` 表的切分字段，从 V0.1.4 升级时必须执行本步骤。**
+
+从 V0.1.4 升级时注意：V0.1.4 的任务在探测成功后已删除本地副本，这类任务重试时会按对象键从 TOS 取回原始视频再处理，属正常路径，只是多一次下载。

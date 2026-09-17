@@ -2,8 +2,11 @@
 
 from app.tasks.executor import requeue_pending, run_sync, shutdown, submit
 from app.tasks.runner import (
+    PROGRESS_CONVERTED,
     PROGRESS_DONE,
-    PROGRESS_PROBING,
+    PROGRESS_PROBED,
+    PROGRESS_SPLIT_END,
+    PROGRESS_SPLIT_START,
     STATUS_FAILED,
     STATUS_PROCESSING,
     STATUS_SUCCEEDED,
@@ -20,8 +23,11 @@ from app.tasks.runner import (
 )
 
 __all__ = [
+    "PROGRESS_CONVERTED",
     "PROGRESS_DONE",
-    "PROGRESS_PROBING",
+    "PROGRESS_PROBED",
+    "PROGRESS_SPLIT_END",
+    "PROGRESS_SPLIT_START",
     "STATUS_FAILED",
     "STATUS_PROCESSING",
     "STATUS_SUCCEEDED",

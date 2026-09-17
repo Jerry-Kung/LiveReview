@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import chunks as chunk_store
+from app.media.paths import clips_dir, converted_path, original_path
 from app.storage.mock import FaultMode
 from tests.conftest import CHUNK_SIZE, FILE_SIZE
 
@@ -283,7 +284,6 @@ def test_retry_after_processing_failure_succeeds(client, storage, db_session_fac
 
     重试时上传留下的本地副本已被清理，探测会按对象键从存储取回，因此这里预置对象内容。
     """
-    from app.media.paths import original_path
     from app.models import Task, utcnow
 
     data = _create(client)
@@ -322,8 +322,9 @@ def test_retry_after_processing_failure_succeeds(client, storage, db_session_fac
     assert latest["error"] is None
     assert latest["object_key"] == object_key
     assert latest["metadata"]["duration_seconds"] == 600.0
-    # 对象已在存储中，重试不重复上传
-    assert len(storage.uploaded_keys) == 1
+    # 对象已在存储中，重试不重复上传原始视频；切出的片段是本轮新增的对象
+    assert storage.uploaded_keys[0] == object_key
+    assert len([key for key in storage.uploaded_keys if "/clip/" in key]) == len(latest["clips"])
 
     # 探测成功后再删掉本地副本与对象的临时夹具内容，避免影响后续断言
     client.delete(f"/api/tasks/{task_id}")
@@ -527,30 +528,40 @@ def _upload_one(client, storage) -> tuple[str, str, str]:
 
 def test_delete_removes_object_records_and_chunks(client, storage, media_root, db_session_factory):
     upload_id, task_id, object_key = _upload_one(client, storage)
-    assert storage.object_count == 1
+    task = client.get(f"/api/tasks/{task_id}").json()
+    clip_count = len(task["clips"])
+    assert clip_count > 0
+    # 云端对象 = 原始视频 + 各切片
+    assert storage.object_count == 1 + clip_count
 
     resp = client.delete(f"/api/tasks/{task_id}")
     assert resp.status_code == 204, resp.text
 
-    # 云端对象已删除
+    # 云端对象（原始视频与全部切片）已删除
     assert storage.object_count == 0
     # 任务与上传会话记录均已删除
     assert client.get(f"/api/tasks/{task_id}").status_code == 404
     assert client.get(f"/api/uploads/{upload_id}").status_code == 404
     assert client.get("/api/tasks").json()["items"] == []
 
-    from app.models import Task, UploadSession
+    from app.models import MediaClip, Task, UploadSession
 
     db = db_session_factory()
     try:
         assert db.get(Task, task_id) is None
+        # 片段行随任务级联删除
+        assert list(db.query(MediaClip).filter(MediaClip.task_id == task_id)) == []
         assert db.get(UploadSession, upload_id) is None
     finally:
         db.close()
 
-    # 本地分片目录与合并临时文件不残留
+    # 本地分片目录、合并临时文件与切片目录均不残留
     assert not chunk_store.chunks_dir(media_root, upload_id).exists()
     assert not chunk_store.merged_path(media_root, upload_id).exists()
+    assert not clips_dir(media_root, task_id).exists()
+    # 原始副本与转封装产物也不残留
+    assert not original_path(media_root, task_id, "live.ts").exists()
+    assert not converted_path(media_root, task_id).exists()
 
 
 def test_delete_unknown_task_returns_404(client):

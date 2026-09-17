@@ -105,3 +105,117 @@ def test_probes_the_local_copy_of_a_task(
     assert "任务 tk1" in output
     assert str(copy) in output
     assert "结论：探测成功" in output
+
+
+def test_clips_flag_lists_slices_with_time_ranges(
+    settings, db_session_factory, media_root, monkeypatch, capsys
+):
+    """`--clips` 打印切片的时间顺序与覆盖结论，供测试环境抽查切分结果。"""
+    from app.models import MediaClip, Task, utcnow
+
+    task = Task(
+        id="tk2",
+        kind="ingest",
+        status="succeeded",
+        object_key="liverreview/original/x.ts",
+        split_source_format="mov,mp4,m4a,3gp,3g2,mj2",
+        split_source_duration_seconds=600.0,
+        split_checked_at=utcnow(),
+    )
+    db = db_session_factory()
+    try:
+        db.add(task)
+        db.add_all(
+            [
+                MediaClip(
+                    task_id="tk2",
+                    index=0,
+                    start_seconds=0.0,
+                    end_seconds=300.0,
+                    duration_seconds=300.0,
+                    size_bytes=1024,
+                    object_key="liverreview/clip/clip_000.mp4",
+                    status="uploaded",
+                ),
+                MediaClip(
+                    task_id="tk2",
+                    index=1,
+                    start_seconds=300.0,
+                    end_seconds=600.0,
+                    duration_seconds=300.0,
+                    size_bytes=1024,
+                    object_key="liverreview/clip/clip_001.mp4",
+                    status="uploaded",
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("app.database.SessionLocal", db_session_factory)
+
+    code = cli.main(["tk2", "--clips"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "切片共 2 片" in output
+    assert "#0  0.0s ~ 300.0s" in output
+    assert "#1  300.0s ~ 600.0s" in output
+    assert "覆盖校验：通过" in output
+
+
+def test_clips_flag_reports_gap(settings, db_session_factory, media_root, monkeypatch, capsys):
+    """切片之间存在缺口时 `--clips` 必须以非零退出码暴露问题。"""
+    from app.models import MediaClip, Task
+
+    task = Task(
+        id="tk3",
+        kind="ingest",
+        status="failed",
+        object_key="liverreview/original/x.ts",
+        split_source_duration_seconds=600.0,
+        error="SplitError: 覆盖校验发现 1 处问题",
+    )
+    db = db_session_factory()
+    try:
+        db.add(task)
+        db.add_all(
+            [
+                MediaClip(task_id="tk3", index=0, start_seconds=0.0, end_seconds=300.0, status="uploaded"),
+                MediaClip(task_id="tk3", index=1, start_seconds=330.0, end_seconds=600.0, status="uploaded"),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("app.database.SessionLocal", db_session_factory)
+
+    code = cli.main(["tk3", "--clips"])
+
+    output = capsys.readouterr().out
+    assert code == 1
+    assert "缺失 30.0s" in output
+    assert "失败原因：SplitError" in output
+
+
+def test_clips_flag_without_records(settings, db_session_factory, monkeypatch, capsys):
+    from app.models import Task
+
+    db = db_session_factory()
+    try:
+        db.add(Task(id="tk4", kind="ingest", status="processing", object_key="k"))
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("app.database.SessionLocal", db_session_factory)
+
+    code = cli.main(["tk4", "--clips"])
+
+    assert code == 1
+    assert "没有切片记录" in capsys.readouterr().out

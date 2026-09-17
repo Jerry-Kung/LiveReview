@@ -88,8 +88,8 @@ def test_storage_config_maps_settings(monkeypatch):
     assert config.access_key == "ak"
 
 
-def test_app_version_is_0_1_4():
-    assert Settings(_env_file=None).app_version == "0.1.4"
+def test_app_version_is_0_1_5():
+    assert Settings(_env_file=None).app_version == "0.1.5"
 
 
 def test_upload_and_media_defaults():
@@ -103,6 +103,24 @@ def test_probe_defaults():
     assert settings.ffprobe_path == "ffprobe"
     assert settings.probe_timeout_seconds == 300
     assert settings.probe_max_output_bytes == 8 * 1024 * 1024
+
+
+def test_split_defaults():
+    """切分约束默认值即验收要求：单片 ≤1GiB 且 ≤60 分钟。"""
+    settings = Settings(_env_file=None)
+    assert settings.split_max_duration_seconds == 3600
+    assert settings.split_max_clip_bytes == 1024 * 1024 * 1024
+    assert settings.ffmpeg_path == "ffmpeg"
+
+
+def test_split_settings_come_from_env(monkeypatch):
+    monkeypatch.setenv("SPLIT_MAX_DURATION_SECONDS", "600")
+    monkeypatch.setenv("SPLIT_MAX_CLIP_BYTES", "104857600")
+    monkeypatch.setenv("SPLIT_MIN_CLIP_SECONDS", "2.5")
+    settings = Settings(_env_file=None)
+    assert settings.split_max_duration_seconds == 600
+    assert settings.split_max_clip_bytes == 104857600
+    assert settings.split_min_clip_seconds == 2.5
 
 
 def test_probe_env_overrides(monkeypatch):

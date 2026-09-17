@@ -4,6 +4,9 @@
 同时脚本自身可在被调用时写 side 文件，供测试断言「探测时用的是哪份文件」。
 
 行为约定：
+- 若被探测文件旁边存在 `<文件>.fakemeta.json`（由 `fake_ffmpeg` 写出），则按该 sidecar
+  回答：转封装产物与切片产物的时长、容器、有无音频都从那里读；原始素材没有 sidecar，
+  走下面的固定元数据。
 - 默认输出一份固定的 TS 元数据（有音视频流，时长 600 秒）。
 - 设置 `LIVERREVIEW_FAKE_PROBE_MODE` 改变行为：
   - `bad-media`：以退出码 1 失败，stderr 输出可识别的错误文本；
@@ -22,6 +25,8 @@ import os
 import sys
 import time
 from pathlib import Path
+
+SIDECAR_SUFFIX = ".fakemeta.json"
 
 METADATA = {
     "streams": [
@@ -61,6 +66,45 @@ NO_STREAM_METADATA = {
 }
 
 
+def _video_stream() -> dict:
+    return json.loads(json.dumps(METADATA["streams"][0]))
+
+
+def _audio_stream() -> dict:
+    return json.loads(json.dumps(METADATA["streams"][1]))
+
+
+def _sidecar_metadata(source: Path) -> dict | None:
+    """按 fake_ffmpeg 写出的 sidecar 构造探测结果；无 sidecar 时返回 None。"""
+    sidecar = Path(f"{source}{SIDECAR_SUFFIX}")
+    if not sidecar.is_file():
+        return None
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    streams: list[dict] = []
+    if payload.get("has_video", True):
+        streams.append(_video_stream())
+    if payload.get("has_audio", True):
+        streams.append(_audio_stream())
+
+    duration = payload.get("duration_seconds", 600.0)
+    size = source.stat().st_size if source.is_file() else 0
+    return {
+        "streams": streams,
+        "format": {
+            "format_name": payload.get("format_name", "mov,mp4,m4a,3gp,3g2,mj2"),
+            "format_long_name": "QuickTime / MOV",
+            "duration": str(duration),
+            "size": str(size),
+            "probe_score": 50,
+            "nb_streams": len(streams),
+        },
+    }
+
+
 def main() -> int:
     args = sys.argv[1:]
     source = Path(args[-1]) if args else None
@@ -79,6 +123,9 @@ def main() -> int:
         return 1
 
     payload = NO_STREAM_METADATA if mode == "no-streams" else METADATA
+    if mode != "no-streams" and source is not None:
+        payload = _sidecar_metadata(source) or payload
+
     sys.stdout.write(json.dumps(payload))
     return 0
 

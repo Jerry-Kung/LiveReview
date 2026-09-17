@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -19,6 +27,12 @@ def utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+# 片段状态：本地是否还有切片产物、对象存储里是否已有对象，都由此判断
+CLIP_STATUS_PENDING = "pending"
+CLIP_STATUS_UPLOADED = "uploaded"
+CLIP_STATUS_FAILED = "failed"
 
 
 class UploadSession(Base):
@@ -74,6 +88,15 @@ class Task(Base):
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     probed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # 预处理与切分结果（V0.1.5）
+    # 切分输入可能来自转封装产物而非原始文件，其时长/容器才是时间轴基准，须单独记录
+    split_source_format: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    split_source_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 覆盖校验结论：JSON 问题列表（空表示通过），split_checked_at 是「是否校验过」的依据
+    coverage_issues_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    split_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     upload_id: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("upload_sessions.id"), nullable=True
     )
@@ -83,6 +106,11 @@ class Task(Base):
     )
 
     upload: Mapped[UploadSession | None] = relationship(back_populates="task")
+    clips: Mapped[list["MediaClip"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="MediaClip.index",
+    )
 
     @property
     def filename(self) -> str | None:
@@ -92,3 +120,45 @@ class Task(Base):
     def has_metadata(self) -> bool:
         """是否已有探测结果：供接口与前端区分「未探测」与「探测出空值」。"""
         return self.probed_at is not None
+
+    @property
+    def has_coverage_check(self) -> bool:
+        """是否已做过覆盖校验：区分「校验通过」与「尚未校验」。"""
+        return self.split_checked_at is not None
+
+
+class MediaClip(Base):
+    """切片记录：一个任务按时间顺序切出的第 N 片，与其在原视频中的时间范围。
+
+    `index` 是顺序的唯一依据（0 起递增，即切分与上传的先后顺序），不用创建时间排序——
+    上传完成的先后受网络波动影响，会与时间轴顺序不一致。
+
+    对象键在首次生成后入库并在重试时复用：重试若换键会让同一片段在桶里留下多份副本。
+    """
+
+    __tablename__ = "media_clips"
+    __table_args__ = (UniqueConstraint("task_id", "index", name="uq_media_clips_task_index"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("tasks.id", ondelete="CASCADE"), index=True
+    )
+    index: Mapped[int] = mapped_column(Integer)
+
+    # 在切分输入中的时间范围（秒）：即片段在原场直播中的定位，V0.1.6 回看依赖它
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    # 实测值：-c copy 的切点落在关键帧上，实际时长与体积以探测与 stat 为准
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default=CLIP_STATUS_PENDING)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    task: Mapped[Task] = relationship(back_populates="clips")
+
+    @property
+    def is_uploaded(self) -> bool:
+        """是否已成功落对象存储：重试时据此跳过，不重复上传。"""
+        return self.status == CLIP_STATUS_UPLOADED and bool(self.object_key)

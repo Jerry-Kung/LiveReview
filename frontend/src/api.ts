@@ -37,6 +37,32 @@ export type TaskMetadata = {
   probed_at: string;
 };
 
+export type TaskClip = {
+  index: number;
+  start_seconds: number;
+  end_seconds: number;
+  duration_seconds: number | null;
+  size_bytes: number | null;
+  status: string;
+  error: string | null;
+  object_key: string | null;
+  /** 预签名下载地址：仅已落对象存储的片段有值 */
+  download_url: string | null;
+};
+
+export type CoverageIssue = {
+  code: string;
+  message: string;
+};
+
+export type TaskCoverage = {
+  clip_count: number;
+  checked_at: string;
+  issues: CoverageIssue[];
+  source_format: string | null;
+  source_duration_seconds: number | null;
+};
+
 export type Task = {
   id: string;
   kind: string;
@@ -48,6 +74,10 @@ export type Task = {
   error: string | null;
   /** 媒体探测结果：未探测成功时为 null（与「探测出空值」区分开） */
   metadata: TaskMetadata | null;
+  /** 切分与覆盖校验结论：未切分时为 null */
+  coverage: TaskCoverage | null;
+  /** 切片列表：按序号升序，即原视频时间轴上的顺序 */
+  clips: TaskClip[];
   created_at: string;
   updated_at: string;
 };

@@ -84,15 +84,21 @@ def test_probe_stores_metadata_on_task(client, media_root):
 
 
 def test_probe_runs_against_the_local_copy(client, media_root, monkeypatch, tmp_path):
-    """探测对象必须是上传留下的本地副本，而不是分片目录或合并临时文件。"""
+    """探测对象必须是上传留下的本地副本，而不是分片目录或合并临时文件。
+
+    V0.1.5 起同一任务会在探测之后继续探测转封装产物与切片产物，因此这里断言的是
+    「探测过原始副本」而非「只探测了一次」。
+    """
     log = tmp_path / "probe-log.txt"
     monkeypatch.setenv("LIVERREVIEW_FAKE_PROBE_LOG", str(log))
 
     data = _complete(client)
 
     probed = [Path(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
-    assert len(probed) == 1
-    assert probed[0] == original_path(media_root, data["task_id"], "live.ts")
+    expected = original_path(media_root, data["task_id"], "live.ts")
+    assert expected in probed
+    # 首个被探测的文件必须是本地副本：时间基准来自原始素材，不能先拿产物去算
+    assert probed[0] == expected
 
 
 def test_content_hash_matches_the_uploaded_bytes(client):
@@ -104,8 +110,8 @@ def test_content_hash_matches_the_uploaded_bytes(client):
     assert metadata["content_hash"] == _sha256(expected)
 
 
-def test_local_copy_is_removed_after_successful_probe(client, media_root):
-    """探测成功即释放本地副本：测试环境不该被多场 2GB 文件长期占满。"""
+def test_local_copy_is_removed_after_successful_processing(client, media_root):
+    """处理成功即释放本地副本：测试环境不该被多场 2GB 文件长期占满。"""
     data = _complete(client)
 
     assert not original_path(media_root, data["task_id"], "live.ts").exists()
@@ -161,19 +167,22 @@ def test_retry_clears_stale_metadata(client, db_session_factory, media_root, pro
 
 
 def test_probe_downloads_back_when_local_copy_is_gone(client, storage, media_root, db_session_factory):
-    """本地副本已清理（例如上一轮探测成功后重试）时，探测从对象存储取回文件。"""
+    """本地副本与转封装产物都已清理时，处理从对象存储取回原始文件。"""
+    from app.media.paths import converted_path
     from app.models import Task, utcnow
 
     data = _complete(client)
     task_id = data["task_id"]
     assert not original_path(media_root, task_id, "live.ts").exists()
+    # 转封装产物也清掉，强制走「副本缺失 → 从对象存储取回」这一条路径
+    converted_path(media_root, task_id).unlink(missing_ok=True)
 
     db = db_session_factory()
     try:
+        # 先退回「已失败」以走通重试入口，再由重试接口完成重置
         task = db.get(Task, task_id)
         task.status = "failed"
         task.error = "模拟失败"
-        task.probed_at = None
         task.updated_at = utcnow()
         db.commit()
     finally:
@@ -184,7 +193,7 @@ def test_probe_downloads_back_when_local_copy_is_gone(client, storage, media_roo
     latest = _task(client, task_id)
     assert latest["status"] == "succeeded"
     assert latest["metadata"]["duration_seconds"] == 600.0
-    # 再次探测成功后副本又被清理
+    # 处理成功后副本又被清理
     assert not original_path(media_root, task_id, "live.ts").exists()
 
 

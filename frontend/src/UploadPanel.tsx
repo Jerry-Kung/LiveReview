@@ -17,6 +17,8 @@ import {
   sliceFile,
   uploadChunk,
   type Task,
+  type TaskClip,
+  type TaskCoverage,
   type TaskMetadata,
 } from "./api";
 
@@ -122,6 +124,88 @@ function MetadataSummary({ metadata }: { metadata: TaskMetadata }) {
 /** 任务状态对应的语义标记：只有成功是健康态，其余都需留意。 */
 function taskState(task: Task): "ok" | "attention" {
   return task.status === "succeeded" ? "ok" : "attention";
+}
+
+const CLIP_STATUS_LABELS: Record<string, string> = {
+  pending: "待处理",
+  uploaded: "已上传",
+  failed: "失败",
+};
+
+/** 片段在原视频中的时间区间：定位片段靠的就是它。 */
+export function formatClipRange(clip: TaskClip): string {
+  return `${formatDuration(clip.start_seconds)} ~ ${formatDuration(clip.end_seconds)}`;
+}
+
+/**
+ * 切分结果：片段数、覆盖校验结论与片段列表。
+ *
+ * 覆盖校验的结论直接呈现「通过」或具体问题，不折叠成一句「成功」——验收要求交界、重叠
+ * 与缺失可检查，问题信息本来就是用户要看的内容。
+ */
+function SplitSummary({ coverage, clips }: { coverage: TaskCoverage; clips: TaskClip[] }) {
+  const issues = coverage.issues;
+  return (
+    <div className="split">
+      <dl className="metadata" aria-label="切分结果">
+        <div className="metadata-item">
+          <dt>片段数</dt>
+          <dd>{coverage.clip_count}</dd>
+        </div>
+        <div className="metadata-item">
+          <dt>总时长</dt>
+          <dd>{formatDuration(coverage.source_duration_seconds ?? null)}</dd>
+        </div>
+        <div className="metadata-item">
+          <dt>覆盖校验</dt>
+          <dd>{issues.length === 0 ? "通过" : `${issues.length} 处问题`}</dd>
+        </div>
+      </dl>
+
+      {issues.length > 0 && (
+        <ul className="coverage-issues">
+          {issues.map((issue) => (
+            <li key={`${issue.code}-${issue.message}`}>{issue.message}</li>
+          ))}
+        </ul>
+      )}
+
+      {clips.length > 0 && (
+        <table className="clips">
+          <caption>切片列表（按原视频时间顺序）</caption>
+          <thead>
+            <tr>
+              <th scope="col">序号</th>
+              <th scope="col">时间区间</th>
+              <th scope="col">时长</th>
+              <th scope="col">体积</th>
+              <th scope="col">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {clips.map((clip) => (
+              <tr key={clip.index}>
+                <td>{clip.index + 1}</td>
+                <td>{formatClipRange(clip)}</td>
+                <td>{formatDuration(clip.duration_seconds)}</td>
+                <td>{clip.size_bytes === null ? PLACEHOLDER : formatBytes(clip.size_bytes)}</td>
+                <td>
+                  {clip.download_url ? (
+                    <a href={clip.download_url} target="_blank" rel="noreferrer">
+                      {CLIP_STATUS_LABELS[clip.status] ?? clip.status}
+                    </a>
+                  ) : (
+                    (CLIP_STATUS_LABELS[clip.status] ?? clip.status)
+                  )}
+                  {clip.error && <span className="clip-error"> {clip.error}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }
 
 function describeError(err: unknown): { message: string; missing: number[] } {
@@ -297,6 +381,7 @@ export default function UploadPanel() {
           </p>
           {task.object_key && <p className="hint">对象键：{task.object_key}</p>}
           {task.metadata && <MetadataSummary metadata={task.metadata} />}
+          {task.coverage && <SplitSummary coverage={task.coverage} clips={task.clips} />}
           {task.error && <p className="detail-error">失败原因：{task.error}</p>}
           {!task.error && state.error && <p className="detail-error">{state.error}</p>}
           <div className="actions">

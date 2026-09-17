@@ -276,6 +276,52 @@ body {
   word-break: break-word;
 }
 
+/* 切分结果：结论 + 片段列表。问题逐条列出，便于定位到具体交界 */
+.split {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.coverage-issues {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  color: var(--attention);
+}
+
+.clips {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.clips caption {
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  padding-bottom: 0.3rem;
+}
+
+.clips th,
+.clips td {
+  text-align: left;
+  padding: 0.3rem 0.5rem 0.3rem 0;
+  border-bottom: 1px solid var(--tick);
+  font-variant-numeric: tabular-nums;
+}
+
+.clips th {
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.clip-error {
+  color: var(--attention);
+}
+
 :focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;

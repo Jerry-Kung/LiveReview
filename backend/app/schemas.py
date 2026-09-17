@@ -75,6 +75,44 @@ class TaskMetadataResponse(BaseModel):
     probed_at: datetime
 
 
+class TaskClipResponse(BaseModel):
+    """一个切片（V0.1.5）：序号即其在原视频时间轴上的顺序。
+
+    `start_seconds` / `end_seconds` 是片段在切分输入（转封装产物或原始 MP4）中的定位，
+    也是 V0.1.6 回看定位的依据。`download_url` 只在片段已落对象存储时给出预签名地址。
+    """
+
+    index: int
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float | None = None
+    size_bytes: int | None = None
+    status: str
+    error: str | None = None
+    object_key: str | None = None
+    download_url: str | None = None
+
+
+class CoverageIssueResponse(BaseModel):
+    """一条整场覆盖校验问题：`code` 供程序判断，`message` 供展示。"""
+
+    code: str
+    message: str
+
+
+class TaskCoverageResponse(BaseModel):
+    """切分与覆盖校验结论：`checked_at` 非空表示已校验过。
+
+    未校验时整个对象为 null，避免把「尚未切分」渲染成「校验通过」。
+    """
+
+    clip_count: int
+    checked_at: datetime
+    issues: list[CoverageIssueResponse] = Field(default_factory=list)
+    source_format: str | None = None
+    source_duration_seconds: float | None = None
+
+
 class TaskResponse(BaseModel):
     id: str
     kind: str
@@ -85,6 +123,8 @@ class TaskResponse(BaseModel):
     size: int | None = None
     error: str | None = None
     metadata: TaskMetadataResponse | None = None
+    coverage: TaskCoverageResponse | None = None
+    clips: list[TaskClipResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

@@ -32,7 +32,13 @@ function jsonResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
-function taskResponse(status: string, error: string | null = null, metadata: unknown = null) {
+function taskResponse(
+  status: string,
+  error: string | null = null,
+  metadata: unknown = null,
+  coverage: unknown = null,
+  clips: unknown[] = [],
+) {
   return {
     id: "t1",
     kind: "ingest",
@@ -43,6 +49,8 @@ function taskResponse(status: string, error: string | null = null, metadata: unk
     size: 20,
     error,
     metadata,
+    coverage,
+    clips,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -63,6 +71,29 @@ const METADATA = {
   content_hash: "a".repeat(64),
   probed_at: "2026-01-01T00:00:01Z",
 };
+
+const COVERAGE = {
+  clip_count: 2,
+  checked_at: "2026-01-01T00:10:00Z",
+  issues: [] as Array<{ code: string; message: string }>,
+  source_format: "mov,mp4,m4a,3gp,3g2,mj2",
+  source_duration_seconds: 3725,
+};
+
+function clipResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    index: 0,
+    start_seconds: 0,
+    end_seconds: 1862.5,
+    duration_seconds: 1862.5,
+    size_bytes: 512 * 1024 * 1024,
+    status: "uploaded",
+    error: null,
+    object_key: "liverreview/clip/clip_000_1_abcd.mp4",
+    download_url: "https://mock-tos.local/bucket/liverreview/clip/clip_000.mp4?X-Tos-Expires=3600",
+    ...overrides,
+  };
+}
 
 /** 用可组合的路由表替换 fetch：每个断言只关心自己那条链路的响应。 */
 function mockApi(routes: Array<(url: string, init?: RequestInit) => Response | undefined>) {
@@ -423,5 +454,126 @@ describe("上传与任务链路", () => {
     expect(screen.getAllByText(/Invalid data found/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "重新执行任务" })).toBeInTheDocument();
     expect(screen.queryByLabelText("媒体信息")).not.toBeInTheDocument();
+  });
+});
+
+describe("切分结果展示", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function mockTask(task: unknown, status = 200) {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => (url.startsWith("/api/tasks/") ? jsonResponse(status, task) : undefined),
+    ]);
+  }
+
+  it("展示片段数、总时长与覆盖校验通过", async () => {
+    mockTask(
+      taskResponse("succeeded", null, METADATA, COVERAGE, [
+        clipResponse({ index: 0 }),
+        clipResponse({ index: 1, start_seconds: 1862.5, end_seconds: 3725, duration_seconds: 1862.5 }),
+      ])
+    );
+
+    render(<App />);
+    selectFile();
+
+    expect(await screen.findByText(/任务：已完成/)).toBeInTheDocument();
+    const split = screen.getByLabelText("切分结果");
+    const values = Array.from(split.querySelectorAll("dd")).map((node) => node.textContent);
+    expect(values).toEqual(["2", "1:02:05", "通过"]);
+  });
+
+  it("按原视频时间顺序列出片段，并给出可下载链接", async () => {
+    mockTask(
+      taskResponse("succeeded", null, METADATA, COVERAGE, [
+        clipResponse({ index: 0 }),
+        clipResponse({ index: 1, start_seconds: 1862.5, end_seconds: 3725 }),
+      ])
+    );
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    const table = screen.getByRole("table");
+    const rows = Array.from(table.querySelectorAll("tbody tr"));
+    expect(rows).toHaveLength(2);
+    // 序号从 1 起按时间顺序递增，区间与时间轴一致
+    expect(rows[0].querySelector("td")?.textContent).toBe("1");
+    expect(rows[1].querySelector("td")?.textContent).toBe("2");
+    expect(rows[0].textContent).toContain("0:00 ~ 31:03");
+    expect(rows[1].textContent).toContain("31:03 ~ 1:02:05");
+    expect(table.querySelectorAll("a")).toHaveLength(2);
+  });
+
+  it("覆盖校验有问题时逐条展示", async () => {
+    mockTask(
+      taskResponse("failed", "SplitError: 覆盖校验发现 1 处问题", METADATA, {
+        ...COVERAGE,
+        issues: [{ code: "gap", message: "第 1 片（止于 1862.5s）与第 2 片（起于 1900.0s）之间缺失 37.5s" }],
+      }, [clipResponse()])
+    );
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/失败原因：SplitError/)).toBeInTheDocument());
+    expect(screen.getByText(/缺失 37.5s/)).toBeInTheDocument();
+    expect(screen.getByLabelText("切分结果").textContent).toContain("1 处问题");
+  });
+
+  it("片段上传失败时展示该片段的原因", async () => {
+    mockTask(
+      taskResponse("failed", "StorageServerError: 上传失败", METADATA, COVERAGE, [
+        clipResponse({ status: "failed", error: "code=NoSuchBucket，request_id=abc" }),
+      ])
+    );
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/失败原因：StorageServerError/)).toBeInTheDocument());
+    expect(screen.getByText(/request_id=abc/)).toBeInTheDocument();
+  });
+
+  it("未切分的任务不展示切分结果", async () => {
+    mockTask(taskResponse("processing", null, METADATA));
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：处理中/)).toBeInTheDocument());
+    expect(screen.queryByLabelText("切分结果")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("段数为零时不渲染空表格", async () => {
+    mockTask(
+      taskResponse("succeeded", null, METADATA, {
+        ...COVERAGE,
+        clip_count: 0,
+        issues: [{ code: "missing_end", message: "没有任何片段，整场视频未被覆盖" }],
+      }, [])
+    );
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getByText(/整场视频未被覆盖/)).toBeInTheDocument();
   });
 });

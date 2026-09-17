@@ -11,7 +11,7 @@ def test_health_returns_ok():
     data = resp.json()
     assert data["status"] in ("ok", "degraded")
     assert data["service"] == "LiveReview"
-    assert data["version"] == "0.1.4"
+    assert data["version"] == "0.1.5"
     assert data["environment"] == "development"
     assert data["database"] in ("ok", "degraded")
     assert data["storage"] in ("configured", "not_configured", "unavailable")
@@ -52,7 +52,7 @@ def test_health_reports_storage_configured(monkeypatch):
 
     class FakeSettings:
         app_name = "LiveReview"
-        app_version = "0.1.4"
+        app_version = "0.1.5"
         app_env = "development"
         storage_configured = True
         storage_missing_fields: list[str] = []
@@ -74,7 +74,7 @@ def test_health_reports_storage_unavailable_when_build_fails(monkeypatch):
 
     class FakeSettings:
         app_name = "LiveReview"
-        app_version = "0.1.4"
+        app_version = "0.1.5"
         app_env = "development"
         storage_configured = True
         storage_missing_fields: list[str] = []
