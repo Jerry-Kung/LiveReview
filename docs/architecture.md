@@ -17,7 +17,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **`backend/app/media/`**：媒体处理（ffprobe 探测、ffmpeg 转封装与切分、覆盖校验）的调用、解析与本地产物路径约定；只依赖配置与标准库，不感知数据库、HTTP 与对象存储。
 - **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针，`uploads.py` 与 `tasks.py` 面向前端（统一 `/api` 前缀）。
 - **`backend/app/storage/`**：对象存储的契约与实现，详见下节。
-- **`frontend/src/`**：React SPA。`App.tsx` 负责两屏切换（上传录屏 / 服务状态），`UploadPanel.tsx` 承载分片上传、任务状态、探测结论与切片列表，`api.ts` 对应后端接口契约。
+- **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（页眉 + 侧栏 + 工作区），`Header.tsx` 承载服务状态与用户区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。用户登录为预置功能区（登录态仅前端，不请求后端）；历史记录读既有任务列表接口，账号隔离待登录接入。
 
 ## 本地产物
 

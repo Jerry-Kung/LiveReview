@@ -96,9 +96,14 @@ function clipResponse(overrides: Record<string, unknown> = {}) {
 }
 
 /** 用可组合的路由表替换 fetch：每个断言只关心自己那条链路的响应。 */
-function mockApi(routes: Array<(url: string, init?: RequestInit) => Response | undefined>) {
+function mockApi(
+  routes: Array<(url: string, init?: RequestInit) => Response | undefined>,
+  tasks: unknown[] = []
+) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    // 任务列表是壳层启动时就发的：默认给空列表，用例不必逐个声明
+    if (url.startsWith("/api/tasks?")) return jsonResponse(200, { items: tasks });
     for (const route of routes) {
       const response = route(url, init);
       if (response) return response;
@@ -138,7 +143,7 @@ describe("上传与任务链路", () => {
     mockApi([healthRoute]);
     render(<App />);
     expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
-    expect(screen.getByText(/选择一场直播录屏/)).toBeInTheDocument();
+    expect(screen.getByText(/上传一场直播录屏/)).toBeInTheDocument();
   });
 
   it("分片上传完成后轮询到任务成功", async () => {
@@ -159,6 +164,7 @@ describe("上传与任务链路", () => {
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    // 对象键在任务头上，供排查时与原文件对应
     expect(screen.getByText(/liverreview\/original\/live_1_abcd\.ts/)).toBeInTheDocument();
   });
 
@@ -184,7 +190,7 @@ describe("上传与任务链路", () => {
     render(<App />);
     selectFile();
 
-    expect(await screen.findByText(/^上传中 0%/)).toBeInTheDocument();
+    expect(await screen.findByText("上传中")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
     // 上传期间文件选择被禁用，避免并发切换导致的分片串号
     expect(screen.getByLabelText("选择录屏文件")).toBeDisabled();
@@ -293,7 +299,7 @@ describe("上传与任务链路", () => {
     await waitFor(() => expect(deleted).toEqual(["/api/tasks/t1"]));
     expect(confirm).toHaveBeenCalled();
     // 删除后回到初始态：不再残留任务状态与对象键
-    await waitFor(() => expect(screen.getByText(/选择一场直播录屏/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/上传一场直播录屏/)).toBeInTheDocument());
     expect(screen.queryByText(/对象键/)).not.toBeInTheDocument();
   });
 
@@ -348,11 +354,11 @@ describe("上传与任务链路", () => {
     expect(screen.getByText(/任务：已完成/)).toBeInTheDocument();
   });
 
-  it("切换到服务状态页展示存储状态", async () => {
+  it("页眉展示服务与存储状态", async () => {
     mockApi([healthRoute]);
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "服务状态" }));
-    expect(await screen.findByText(/对象存储：已配置/)).toBeInTheDocument();
+    expect(await screen.findByText(/对象存储/)).toBeInTheDocument();
+    expect(screen.getAllByText(/已配置/).length).toBeGreaterThan(0);
   });
 
   it("探测成功后展示媒体信息，便于核对与实际媒体是否一致", async () => {
@@ -371,11 +377,14 @@ describe("上传与任务链路", () => {
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    // 时长用等宽数字呈现，便于与源文件逐项核对
     expect(screen.getByText("1:02:05")).toBeInTheDocument();
-    expect(screen.getByText("1920×1080")).toBeInTheDocument();
+    expect(screen.getAllByText(/1920×1080/).length).toBeGreaterThan(0);
     expect(screen.getByText("25/1")).toBeInTheDocument();
     expect(screen.getByText("h264")).toBeInTheDocument();
-    expect(screen.getByText("aac · 48.0 kHz · 立体声")).toBeInTheDocument();
+    expect(screen.getByText("aac")).toBeInTheDocument();
+    expect(screen.getByText("48.0 kHz")).toBeInTheDocument();
+    expect(screen.getByText("立体声")).toBeInTheDocument();
     expect(screen.getByText("mpegts")).toBeInTheDocument();
   });
 
@@ -409,7 +418,7 @@ describe("上传与任务链路", () => {
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
     const metadata = screen.getByLabelText("媒体信息");
-    expect(metadata.querySelectorAll("dd")).toHaveLength(6);
+    expect(metadata.querySelectorAll("dd")).toHaveLength(9);
     for (const value of Array.from(metadata.querySelectorAll("dd"))) {
       expect(value.textContent).not.toBe("");
     }
@@ -496,7 +505,7 @@ describe("切分结果展示", () => {
     expect(values).toEqual(["2", "1:02:05", "通过"]);
   });
 
-  it("按原视频时间顺序列出片段，并给出可下载链接", async () => {
+  it("按原视频时间顺序列出片段，并给出在整场中的位置", async () => {
     mockTask(
       taskResponse("succeeded", null, METADATA, COVERAGE, [
         clipResponse({ index: 0 }),
@@ -512,11 +521,31 @@ describe("切分结果展示", () => {
     const rows = Array.from(table.querySelectorAll("tbody tr"));
     expect(rows).toHaveLength(2);
     // 序号从 1 起按时间顺序递增，区间与时间轴一致
-    expect(rows[0].querySelector("td")?.textContent).toBe("1");
-    expect(rows[1].querySelector("td")?.textContent).toBe("2");
+    expect(rows[0].querySelector("td")?.textContent).toBe("01");
+    expect(rows[1].querySelector("td")?.textContent).toBe("02");
     expect(rows[0].textContent).toContain("0:00 ~ 31:03");
     expect(rows[1].textContent).toContain("31:03 ~ 1:02:05");
-    expect(table.querySelectorAll("a")).toHaveLength(2);
+    // 位置条按原视频时间轴给出起止区间，第二片接在第一片之后
+    const spans = table.querySelectorAll<HTMLElement>(".axis-span");
+    expect(spans).toHaveLength(2);
+    expect(spans[0].style.left).toBe("0%");
+    expect(spans[1].style.left).toBe("50%");
+  });
+
+  it("不提供切片回看入口，片段只以文字信息呈现", async () => {
+    mockTask(
+      taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })])
+    );
+
+    render(<App />);
+    selectFile();
+
+    await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+    const table = screen.getByRole("table");
+    // 撤销切片回看：既没有下载/播放链接，也没有 video 元素
+    expect(table.querySelectorAll("a")).toHaveLength(0);
+    expect(document.querySelector("video")).toBeNull();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("覆盖校验有问题时逐条展示", async () => {
@@ -575,5 +604,93 @@ describe("切分结果展示", () => {
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.getByText(/整场视频未被覆盖/)).toBeInTheDocument();
+  });
+});
+
+describe("工作台壳层", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("页眉展示项目中文名称与用户登录入口", async () => {
+    mockApi([healthRoute]);
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: "直播视频复盘分析工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "用户登录" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/版本/)).toBeInTheDocument());
+  });
+
+  it("登录为预留功能区：提交后进入账号态并说明未接入后端", async () => {
+    mockApi([healthRoute]);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "用户登录" }));
+    const dialog = screen.getByRole("dialog", { name: "用户登录" });
+    expect(dialog.textContent).toContain("预留功能区");
+
+    fireEvent.change(screen.getByLabelText("账号"), { target: { value: "林可" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入工作台" }));
+
+    // 弹层关闭，页眉改为账号态
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("林可")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "退出" })).toBeInTheDocument();
+  });
+
+  it("账号为空时不进入账号态并给出提示", async () => {
+    mockApi([healthRoute]);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "用户登录" }));
+    fireEvent.click(screen.getByRole("button", { name: "进入工作台" }));
+
+    expect(screen.getByText("请填写登录账号。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "退出" })).not.toBeInTheDocument();
+  });
+
+  it("侧栏历史记录列出既有任务，点击后在工作区展示该任务结果", async () => {
+    const history = taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })]);
+    mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, history) : undefined)], [
+      history,
+    ]);
+
+    render(<App />);
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    fireEvent.click(item);
+
+    await waitFor(() =>
+      expect(screen.getByText(/正在查看历史任务的处理结果/)).toBeInTheDocument()
+    );
+    expect(screen.getByLabelText("媒体信息")).toBeInTheDocument();
+  });
+
+  it("没有历史任务时给出空态说明", async () => {
+    mockApi([healthRoute], []);
+    render(<App />);
+
+    expect(await screen.findByText(/还没有任务/)).toBeInTheDocument();
+  });
+
+  it("历史记录读取失败时说明原因，不影响工作区上传入口", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/health")) return jsonResponse(200, HEALTH);
+      if (url.startsWith("/api/tasks?")) return jsonResponse(503, { detail: "任务列表暂不可用" });
+      throw new Error(`未覆盖的请求：${url}`);
+    }) as unknown as typeof fetch;
+
+    render(<App />);
+
+    expect(await screen.findByText("任务列表暂不可用")).toBeInTheDocument();
+    expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
   });
 });
