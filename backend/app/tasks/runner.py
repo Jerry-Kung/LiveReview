@@ -58,6 +58,8 @@ from app.models import (
     CLIP_STATUS_FAILED,
     CLIP_STATUS_PENDING,
     CLIP_STATUS_UPLOADED,
+    UNDERSTANDING_STATUS_PENDING,
+    UNDERSTANDING_STATUS_RUNNING,
     MediaClip,
     Task,
     UploadSession,
@@ -664,6 +666,54 @@ def reclaim_stale_processing(db: Session) -> int:
     )
     db.commit()
     return result.rowcount or 0
+
+
+def reclaim_interrupted_understanding(db: Session) -> list[str]:
+    """把被进程重启打断的识别退回可续跑状态，返回需要重新入队的任务 id。
+
+    识别停在 `running` 说明发请求的那一轮随进程一起没了，而 `understanding_status=running`
+    会让启动识别接口直接回 409——不重置的话这场识别永远卡在「识别中」。重置只清任务级结论，
+    **片段级结果一律保留**：已成功的片段在续跑时按 `understanding_succeeded` 跳过，因此这次
+    恢复不会把已经花过钱的片段重新请求一遍。
+
+    注意这与「重启后自动续跑」是同一件事的两面：只要曾经启动过识别（`understanding_started_at`
+    有值），中断后接着往完跑；从未启动过的任务不会被这里翻出来，识别仍然要用户明确点一次。
+    """
+    # 先取任务 id：`update` 拿不到主键列表，而重新入队需要它
+    interrupted = [
+        task_id
+        for task_id in db.execute(
+            select(Task.id).where(
+                Task.understanding_status == UNDERSTANDING_STATUS_RUNNING,
+                Task.understanding_finished_at.is_(None),
+            )
+        ).scalars()
+    ]
+
+    for clip in db.execute(
+        select(MediaClip).where(
+            MediaClip.understanding_status == UNDERSTANDING_STATUS_RUNNING,
+            MediaClip.understanding_finished_at.is_(None),
+        )
+    ).scalars():
+        clip.understanding_status = UNDERSTANDING_STATUS_PENDING
+        clip.understanding_started_at = None
+
+    if interrupted:
+        db.execute(
+            update(Task)
+            .where(Task.id.in_(interrupted))
+            .values(
+                understanding_status=UNDERSTANDING_STATUS_PENDING,
+                understanding_error=None,
+                # 进度退回起点：续跑会从已成功的片段之后接着推进
+                understanding_progress=0,
+                understanding_finished_at=None,
+                updated_at=utcnow(),
+            )
+        )
+    db.commit()
+    return interrupted
 
 
 def remove_task_records(db: Session, task: Task) -> None:

@@ -1,7 +1,7 @@
 """后台任务执行器：进程内线程池 + 落库状态流转。
 
-单实例部署下的最简方案，满足「关闭页面不影响后台任务继续执行」。多实例与进程重启后的
-任务恢复不在本版范围；任务状态已落库，重启后可按 `uploaded` 状态重新入队。
+单实例部署下的最简方案，满足「关闭页面不影响后台任务继续执行」。多实例与横向扩展不在本版
+范围；进程重启丢掉的在途工作由启动时的 `requeue_pending` 恢复（见该函数的说明）。
 
 两条任务体共用同一个线程池，**不拆池**：它们在业务上串联（切分完成才有片段可识别），
 拆池会让「切片还在跑、识别已占满另一池」这种本可避免的并发白白吃掉配额。
@@ -14,12 +14,18 @@ import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
+from sqlalchemy import select
+
+from app import chunks as chunk_store
+from app.config import get_settings
 from app.database import SessionLocal
+from app.models import Task, UploadSession
 from app.tasks.runner import (
     STATUS_UPLOADED,
     TASK_KIND_INGEST,
     TASK_KIND_UNDERSTAND,
     list_tasks,
+    reclaim_interrupted_understanding,
     reclaim_stale_processing,
     run_task,
 )
@@ -42,6 +48,24 @@ def _get_executor() -> ThreadPoolExecutor:
             if _executor is None:
                 _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="task")
     return _executor
+
+
+def list_unfinished_uploads(db) -> list[str]:
+    """尚未入库的上传会话 id（按创建时间升序）。
+
+    `completed` 之外的三种状态都可能停在「分片齐了但没人合并」：关页面中断的会话停在
+    `uploading`，合并途中被杀停在 `assembling`，入库失败停在 `failed`。是否真的能续跑由
+    `_resume_one` 按磁盘上的分片判断，这里不做过滤。
+    """
+    from app.uploads import STATUS_COMPLETED
+
+    return list(
+        db.execute(
+            select(UploadSession.id)
+            .where(UploadSession.status != STATUS_COMPLETED)
+            .order_by(UploadSession.created_at)
+        ).scalars()
+    )
 
 
 def run_sync(task_id: str, phase: str) -> None:
@@ -84,14 +108,25 @@ def submit(task_id: str, phase: str = TASK_KIND_INGEST) -> None:
 
 
 def requeue_pending() -> int:
-    """启动时把 `uploaded` 状态的任务重新入队，覆盖进程重启丢任务的场景。
+    """启动时恢复被中断的工作，返回重新入队的处理任务数。
 
-    先把残留的 `processing` 退回 `uploaded`：进程重启后原认领凭据已失效，这类任务若不
-    重置，既不会被重新入队也永远不会推进。
+    覆盖三类「进程重启丢掉在途工作」的场景，都是启动时一次性扫描：
+
+    1. **分片已收齐但尚未入库的上传**：上传由浏览器逐片驱动，关页面就断在「分片在盘上、
+       没人合并入库」。这里把这类会话交给 `app/uploads.py` 的 `finalize` 接着做完，用户
+       不必回来重新上传；分片没收齐的会话保持原状，仍可续传。
+    2. **残留的 `processing` 任务**：退回 `uploaded` 并重新入队（认领凭据已失效）。
+    3. **被打断的识别**：退回 `pending` 并重新入队（见 `reclaim_interrupted_understanding`）。
+
+    识别恢复只在「曾经启动过识别」的任务上发生，且已成功的片段不会重复请求，因此重启不会
+    凭空产生模型费用。
     """
+    recovered = resume_interrupted_uploads()
+
     db = SessionLocal()
     try:
         reclaimed = reclaim_stale_processing(db)
+        resumed_understanding = reclaim_interrupted_understanding(db)
         pending = [task.id for task in list_tasks(db, limit=100) if task.status == STATUS_UPLOADED]
     finally:
         db.close()
@@ -102,7 +137,82 @@ def requeue_pending() -> int:
         submit(task_id)
     if pending:
         logger.info("启动时重新入队 %d 个待处理任务", len(pending))
-    return len(pending)
+
+    for task_id in resumed_understanding:
+        submit(task_id, TASK_KIND_UNDERSTAND)
+    if resumed_understanding:
+        logger.info("启动时续跑 %d 个中断的识别任务", len(resumed_understanding))
+        if not get_settings().llm_configured:
+            # 不拦：配置补齐后重启即会续跑。但要留下线索，否则用户只会看到识别「没动静」
+            logger.warning(
+                "识别已退回待续跑，但模型未配置，本轮会直接失败；补齐 LLM_* 配置后重启即可继续"
+            )
+
+    return len(pending) + len(resumed_understanding) + recovered
+
+
+def resume_interrupted_uploads() -> int:
+    """把分片已收齐但未入库的上传接着做完，返回恢复的会话数。
+
+    只认「分片齐了」的会话：缺片的会话仍然需要浏览器把剩下的分片传上来，恢复不了，也不该
+    在这里把它判失败（用户回来续传仍然有效）。
+    """
+    settings = get_settings()
+
+    db = SessionLocal()
+    try:
+        candidates = list_unfinished_uploads(db)
+    except Exception:  # noqa: BLE001 —— 恢复失败不能让服务起不来
+        logger.exception("扫描未完成的上传会话失败")
+        return 0
+    finally:
+        db.close()
+
+    resumed = 0
+    for upload_id in candidates:
+        try:
+            if _resume_one(upload_id, settings):
+                resumed += 1
+        except Exception:  # noqa: BLE001 —— 单个会话失败不影响其余会话
+            logger.exception("恢复上传会话 %s 失败", upload_id)
+    return resumed
+
+
+def _resume_one(upload_id: str, settings) -> bool:
+    """尝试恢复单个上传会话；分片不齐或状态已推进时返回 False（保持原状）。
+
+    每次调用开一个自己的会话期：合并 GB 级文件耗时可观，不能让一个事务把所有会话串在一起。
+    """
+    from app import uploads as pipeline
+
+    task_id: str | None = None
+    db = SessionLocal()
+    try:
+        session = db.get(UploadSession, upload_id)
+        if session is None or session.status == pipeline.STATUS_COMPLETED:
+            return False
+        task = db.query(Task).filter(Task.upload_id == session.id).one_or_none()
+        if task is None:
+            return False
+        task_id = task.id
+
+        total = chunk_store.chunk_count(session.declared_size, session.chunk_size)
+        if chunk_store.missing_indices(settings.media_root, session.id, total):
+            # 缺片：留待用户回来补齐，这不是失败
+            return False
+
+        logger.info("恢复未完成的上传会话 %s：%s", session.id, session.filename)
+        pipeline.finalize(db, session, task, settings)
+    except pipeline.UploadFinalizeError as exc:
+        # 失败原因已落库，任务可从界面重试
+        logger.warning("会话 %s 恢复失败：%s", upload_id, exc)
+        return False
+    finally:
+        db.close()
+
+    if task_id is not None:
+        submit(task_id)
+    return True
 
 
 def shutdown() -> None:

@@ -1,4 +1,9 @@
-"""上传接口：创建会话、接收分片、合并并落对象存储。"""
+"""上传接口：创建会话、接收分片、合并并落对象存储。
+
+分片的接收是浏览器驱动的（前端逐片 PUT），但**收齐之后的合并与入库不依赖浏览器**：
+`app/uploads.py` 的 `finalize` 由本模块的完成接口与启动恢复共用，因此关掉页面甚至上传
+尚未收齐时中断，服务端都能在下次启动时接着把这次上传做完。
+"""
 
 from __future__ import annotations
 
@@ -9,9 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app import chunks as chunk_store
+from app import uploads as pipeline
 from app.config import Settings, get_settings
 from app.database import get_db
-from app.media.paths import original_path as media_original_path
 from app.models import Task, UploadSession, utcnow
 from app.schemas import (
     MissingChunksDetail,
@@ -20,19 +25,23 @@ from app.schemas import (
     UploadCreateResponse,
     UploadStatusResponse,
 )
-from app.storage import OBJECT_KIND_ORIGINAL, StorageError, describe_error, get_storage
-from app.tasks import STATUS_FAILED, STATUS_UPLOADED, STATUS_UPLOADING, submit
+from app.storage import StorageError
+# 上传会话状态与任务状态同名不同义（会话的 `uploading` 指「还在收分片」），因此带前缀导入
+from app.tasks import STATUS_UPLOADING as TASK_UPLOADING
+from app.tasks import submit
+from app.uploads import (
+    ACCEPTING_STATUSES,
+    SESSION_ASSEMBLING,
+    SESSION_COMPLETED,
+    SESSION_UPLOADING,
+    UploadFinalizeError,
+    finalize,
+    reopen_if_failed,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
-
-# 会话状态取值：uploading 收分片、assembling 合并入库中、completed 已完成、failed 失败可续传
-STATUS_UPLOADING_SESSION = "uploading"
-STATUS_ASSEMBLING = "assembling"
-STATUS_COMPLETED = "completed"
-STATUS_FAILED_SESSION = "failed"
-ACCEPTING_STATUSES = (STATUS_UPLOADING_SESSION, STATUS_FAILED_SESSION)
 
 
 def _session_or_404(db: Session, upload_id: str) -> UploadSession:
@@ -40,24 +49,6 @@ def _session_or_404(db: Session, upload_id: str) -> UploadSession:
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="上传会话不存在")
     return session
-
-
-def _reopen_if_failed(db: Session, session: UploadSession, task: Task) -> None:
-    """失败后重新提交视为继续本次上传：会话退回 uploading 并清掉旧的失败原因。
-
-    分片产物保留在磁盘上，因此重试不需要重传已成功的分片。任务在原始视频真正落存储前
-    一律退回 `uploading`，避免「还没入库的任务」被判为可重试。
-    """
-    if session.status != STATUS_FAILED_SESSION:
-        return
-    session.status = STATUS_UPLOADING_SESSION
-    session.error = None
-    session.updated_at = utcnow()
-    task.status = STATUS_UPLOADING
-    task.error = None
-    task.process_token = None
-    task.updated_at = utcnow()
-    db.commit()
 
 
 def _upload_task(db: Session, session: UploadSession) -> Task:
@@ -100,12 +91,12 @@ def create_upload(
         filename=payload.filename,
         declared_size=payload.size,
         chunk_size=chunk_size,
-        status=STATUS_UPLOADING_SESSION,
+        status=SESSION_UPLOADING,
     )
     task = Task(
         id=uuid.uuid4().hex[:16],
         kind="ingest",
-        status=STATUS_UPLOADING,
+        status=TASK_UPLOADING,
         progress=0,
         size=payload.size,
         upload_id=upload_id,
@@ -142,7 +133,7 @@ async def upload_chunk(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"上传会话当前状态为 {session.status}，不再接收分片",
         )
-    _reopen_if_failed(db, session, _upload_task(db, session))
+    reopen_if_failed(db, session, _upload_task(db, session))
 
     total = chunk_store.chunk_count(session.declared_size, session.chunk_size)
     if index < 0 or index >= total:
@@ -188,13 +179,13 @@ def complete_upload(
 ) -> UploadCompleteResponse:
     """校验分片齐全 → 合并 → 上传对象存储 → 任务转入待处理并交给后台执行器。"""
     session = _session_or_404(db, upload_id)
-    if session.status == STATUS_COMPLETED:
+    if session.status == SESSION_COMPLETED:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="本次上传已完成，无需重复提交")
-    if session.status == STATUS_ASSEMBLING:
+    if session.status == SESSION_ASSEMBLING:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="本次上传正在入库，请稍候")
 
     task = _upload_task(db, session)
-    _reopen_if_failed(db, session, task)
+    reopen_if_failed(db, session, task)
 
     total = chunk_store.chunk_count(session.declared_size, session.chunk_size)
     missing = chunk_store.missing_indices(settings.media_root, upload_id, total)
@@ -211,67 +202,23 @@ def complete_upload(
             ).model_dump(),
         )
 
-    session.status = STATUS_ASSEMBLING
+    session.status = SESSION_ASSEMBLING
     session.updated_at = utcnow()
     db.commit()
 
-    local_copy = media_original_path(settings.media_root, task.id, session.filename)
     try:
-        merged = chunk_store.assemble(settings.media_root, upload_id, total, session.declared_size)
-        storage = get_storage()
-        object_key = storage.generate_object_key(OBJECT_KIND_ORIGINAL, session.filename)
-        stored = storage.upload_file(merged, object_key)
-        # 合并产物转存为「待探测的本地副本」：探测直接用它，避免再从对象存储拉一遍 GB 级文件
-        chunk_store.move_merged_to_original(merged, local_copy)
-    except (chunk_store.UploadError, StorageError) as exc:
-        _mark_failed(db, session, task, exc)
+        object_key = finalize(db, session, task, settings)
+    except UploadFinalizeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"上传失败：{exc}") from exc
-    except Exception as exc:  # noqa: BLE001 —— 未知异常同样需要落库，避免会话卡在 assembling
-        logger.exception("上传会话 %s 合并或入库失败", upload_id)
-        _mark_failed(db, session, task, exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"上传失败：{exc}") from exc
-    finally:
-        # 失败时保留分片：用户重新提交时无需再传一遍 2GB 原文件。
-        # 合并产物已转存为本地副本时不再清理，它是本次上传唯一的完整文件。
-        if not local_copy.is_file():
-            chunk_store.cleanup_merged(settings.media_root, upload_id)
-
-    # 对象已在存储中就位，本地分片完成使命
-    chunk_store.cleanup(settings.media_root, upload_id)
-
-    session.status = STATUS_COMPLETED
-    session.error = None
-    session.updated_at = utcnow()
-    task.object_key = stored.object_key
-    task.size = stored.size
-    task.status = STATUS_UPLOADED
-    task.progress = 0
-    task.error = None
-    # 上次失败可能已写入 token，重新入队前必须清掉，否则认领条件不成立
-    task.process_token = None
-    task.updated_at = utcnow()
-    db.commit()
+    except StorageError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"上传失败：{exc}") from exc
 
     submit(task.id)
-    logger.info("上传会话 %s 完成：%s（%d 字节）", upload_id, stored.object_key, stored.size)
+    logger.info("上传会话 %s 完成：%s（%d 字节）", upload_id, object_key, session.declared_size)
     return UploadCompleteResponse(
         upload_id=upload_id,
         task_id=task.id,
-        object_key=stored.object_key,
-        size=stored.size,
+        object_key=object_key,
+        size=task.size or session.declared_size,
         status=session.status,
     )
-
-
-def _mark_failed(db: Session, session: UploadSession, task: Task, exc: Exception) -> None:
-    """把失败原因同时写入上传会话与任务，保证两个入口都能看到原因。"""
-    message = f"{type(exc).__name__}: {describe_error(exc)}"
-    session.status = STATUS_FAILED_SESSION
-    session.error = message
-    session.updated_at = utcnow()
-    # 对象已落存储时任务不该被判死：原始视频仍可用，重试接口可重新执行
-    task.status = STATUS_UPLOADED if task.object_key else STATUS_FAILED
-    task.error = message
-    task.updated_at = utcnow()
-    db.commit()
-    logger.error("上传会话 %s 失败：%s", session.id, message)

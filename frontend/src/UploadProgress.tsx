@@ -37,7 +37,9 @@ export default function UploadProgress({
         <span style={{ width: `${percent}%` }} />
       </div>
       <p className="hint">
-        {assembling ? "分片已收齐，正在合并并写入对象存储…" : "可关闭页面，上传需保持在本页完成。"}
+        {assembling
+          ? "分片已收齐，正在合并并写入对象存储。这一步在服务端完成，关掉页面也会继续。"
+          : "上传过程中请保持本页打开；已传完的分片会留在服务端，中断后重新打开页面可接着传。"}
       </p>
     </div>
   );

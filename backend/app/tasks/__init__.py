@@ -4,7 +4,14 @@
 由 `submit(task_id, phase)` 的 phase 参数区分。
 """
 
-from app.tasks.executor import requeue_pending, run_sync, shutdown, submit
+from app.tasks.executor import (
+    list_unfinished_uploads,
+    requeue_pending,
+    resume_interrupted_uploads,
+    run_sync,
+    shutdown,
+    submit,
+)
 from app.tasks.runner import (
     PROGRESS_CONVERTED,
     PROGRESS_DONE,
@@ -21,6 +28,7 @@ from app.tasks.runner import (
     TASK_KIND_UNDERSTAND,
     claim_task,
     list_tasks,
+    reclaim_interrupted_understanding,
     reclaim_stale_processing,
     remove_task_records,
     reset_task_for_retry,
@@ -56,11 +64,14 @@ __all__ = [
     "claim_task",
     "list_clips",
     "list_tasks",
+    "list_unfinished_uploads",
+    "reclaim_interrupted_understanding",
     "reclaim_stale_processing",
     "remove_task_records",
     "requeue_pending",
     "reset_task_for_retry",
     "reset_task_understanding",
+    "resume_interrupted_uploads",
     "retry_clip_understanding",
     "run_sync",
     "run_task",

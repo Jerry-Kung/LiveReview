@@ -24,6 +24,17 @@ const UPLOAD_CREATED = {
   status: "uploading",
 };
 
+/** 上传会话查到一半：第 0 片已在服务端，第 1 片还缺。 */
+const UPLOAD_STATUS_HALF = { ...UPLOAD_CREATED, received_chunks: [0], received_bytes: 10, error: null };
+
+/** 上传会话分片已收齐，但入库还没跑完。 */
+const UPLOAD_STATUS_FULL = {
+  ...UPLOAD_CREATED,
+  received_chunks: [0, 1],
+  received_bytes: 20,
+  error: null,
+};
+
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -129,6 +140,8 @@ describe("上传与任务链路", () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn();
     window.location.hash = "";
+    // 未完成上传的凭据存在 localStorage 里：逐用例清空，免得互相污染
+    window.localStorage.clear();
     // 缩短轮询间隔，用例不必等待真实的 2 秒
     setPollIntervalMs(10);
   });
@@ -136,14 +149,91 @@ describe("上传与任务链路", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     resetPollIntervalMs();
+    window.localStorage.clear();
     vi.restoreAllMocks();
   });
 
-  it("初始展示上传入口与说明", () => {
+  it("初始展示上传入口与说明", async () => {
     mockApi([healthRoute]);
     render(<App />);
+    // 挂载时会先查一次有没有没传完的上传，上传入口在那之后才出现
+    expect(await screen.findByText(/上传一场直播录屏/)).toBeInTheDocument();
     expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
-    expect(screen.getByText(/上传一场直播录屏/)).toBeInTheDocument();
+  });
+
+  it("重开页面后接着上次没传完的上传", async () => {
+    // 上一次传了 1/2 片就关了页面：服务端留着第 0 片，重开页面提示继续
+    window.localStorage.setItem(
+      "livereview.pending-upload",
+      JSON.stringify({
+        upload_id: "u1",
+        task_id: "t1",
+        filename: "live.ts",
+        size: 20,
+        phase: "uploading",
+        saved_at: Date.now(),
+      })
+    );
+
+    const resumedChunks: string[] = [];
+    mockApi([
+      healthRoute,
+      (url) => (url === "/api/uploads/u1" ? jsonResponse(200, UPLOAD_STATUS_HALF) : undefined),
+      (url) => {
+        if (!url.includes("/chunks/")) return undefined;
+        resumedChunks.push(url);
+        return jsonResponse(204, null);
+      },
+    ]);
+
+    render(<App />);
+
+    // 提示里带上已传体积，用户能确认这就是上次那次上传
+    expect(await screen.findByText(/这次上传还没传完/)).toBeInTheDocument();
+    expect(screen.getByText(/已传 10 B \/ 20 B/)).toBeInTheDocument();
+    expect(screen.queryByText(/上传一场直播录屏/)).not.toBeInTheDocument();
+
+    // 补传只发缺的那一片：第 0 片服务端已经有，不该再传一遍
+    const input = screen.getByLabelText("选择同一个文件继续上传");
+    const file = new File([new Uint8Array(20)], "live.ts", { type: "video/mp2t" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(resumedChunks.some((url) => url.endsWith("/chunks/1"))).toBe(true));
+    expect(resumedChunks.some((url) => url.endsWith("/chunks/0"))).toBe(false);
+  });
+
+  it("分片已收齐但没入库时，重开页面直接把完成请求补上", async () => {
+    window.localStorage.setItem(
+      "livereview.pending-upload",
+      JSON.stringify({
+        upload_id: "u1",
+        task_id: "t1",
+        filename: "live.ts",
+        size: 20,
+        phase: "assembling",
+        saved_at: Date.now(),
+      })
+    );
+
+    let completed = 0;
+    mockApi([
+      healthRoute,
+      (url) => (url === "/api/uploads/u1" ? jsonResponse(200, UPLOAD_STATUS_FULL) : undefined),
+      (url) => {
+        if (!url.endsWith("/complete")) return undefined;
+        completed += 1;
+        return jsonResponse(200, { object_key: "k", size: 20 });
+      },
+      (url) => (url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("processing")) : undefined),
+    ]);
+
+    render(<App />);
+
+    // 不必再选一次文件：分片已经全在服务端，剩下的是后端的事
+    await waitFor(() => expect(completed).toBe(1));
+    expect(await screen.findByText(/正在处理/)).toBeInTheDocument();
+    // 凭据用完即清，下次打开页面不该再捡起这次上传
+    expect(window.localStorage.getItem("livereview.pending-upload")).toBeNull();
   });
 
   it("分片上传完成后轮询到任务成功", async () => {

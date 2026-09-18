@@ -121,7 +121,7 @@ class _SyncExecutor:
 def client(db_session_factory, test_settings: Settings, storage, monkeypatch) -> TestClient:
     """装配测试客户端：库、存储与后台执行器全部替换为可控实现。"""
     from app.main import app
-    from app.routers import uploads as uploads_module
+    from app import uploads as uploads_module
 
     def override_get_db():
         db = db_session_factory()
@@ -136,6 +136,7 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
     monkeypatch.setattr("app.storage.get_storage", lambda: storage)
     monkeypatch.setattr("app.deletion.get_storage", lambda: storage)
     monkeypatch.setattr("app.tasks.runner.get_storage", lambda: storage)
+    # 上传入库链路（合并 → 上传对象存储）已从路由层抽到 `app.uploads`，存储实例在那边取
     monkeypatch.setattr(uploads_module, "get_storage", lambda: storage)
     # 关掉线程池：任务在本进程内同步执行，测试无需等待后台线程
     monkeypatch.setattr("app.tasks.executor._get_executor", lambda: _SyncExecutor())
