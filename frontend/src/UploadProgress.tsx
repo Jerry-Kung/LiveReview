@@ -19,9 +19,9 @@ export default function UploadProgress({
   assembling: boolean;
 }) {
   return (
-    <div className="upload-progress">
+    <div className="mt-lg">
       <div className="upload-progress-head">
-        <p className="upload-progress-label">上传中</p>
+        <p className="upload-progress-label">{assembling ? "正在入库" : "上传中"}</p>
         <p className="upload-progress-value">
           {percent}% · {formatBytes(sentBytes)} / {formatBytes(totalBytes)}
         </p>
@@ -36,7 +36,7 @@ export default function UploadProgress({
       >
         <span style={{ width: `${percent}%` }} />
       </div>
-      <p className="hint">
+      <p className="hint mt-md">
         {assembling
           ? "分片已收齐，正在合并并写入对象存储。这一步在服务端完成，关掉页面也会继续。"
           : "上传过程中请保持本页打开；已传完的分片会留在服务端，中断后重新打开页面可接着传。"}

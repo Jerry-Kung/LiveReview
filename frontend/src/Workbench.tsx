@@ -2,14 +2,18 @@
  * 工作区：承接两类内容。
  *
  * 一类是当前这次上传——选文件、分片上传、轮询任务直到出结果；
- * 另一类是用户从历史记录里打开的一个既有任务，只读呈现它的处理结果。
- * 两者共用同一套结果展示（TaskSummary），区别只在于数据从哪来、能给哪些操作。
+ * 另一类是用户从最近任务里打开的一个既有任务，只读呈现它的处理结果。
+ * 两者共用同一套结果展示（`TaskDetailPage`），区别只在于数据从哪来、能给哪些操作。
+ *
+ * V0.4 只重组了这里的呈现层：上传状态机、轮询与恢复逻辑与上一版完全一致，因此
+ * 「关掉页面不影响后台处理」等行为不受界面重构影响。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChangeEvent, DragEvent } from "react";
 import { pollIntervalMs } from "./polling";
-import UploadProgress from "./UploadProgress";
-import TaskSummary from "./TaskSummary";
+import IntakePage from "./IntakePage";
+import TaskDetailPage from "./TaskDetailPage";
 import type { UnderstandingActions } from "./Understanding";
 import type { ReviewActions } from "./Review";
 import {
@@ -21,6 +25,7 @@ import {
   fetchUpload,
   retryClipUnderstanding,
   retryTask,
+  reviewDownloadUrl,
   sliceFile,
   startReview,
   startUnderstanding,
@@ -205,15 +210,15 @@ function useReview(
   return { onReview: () => void onReview(), reviewing };
 }
 
-/** 从历史记录打开的任务：只读取并展示，不在这里发起处理。 */
+/** 从最近任务打开的一条记录：只读取并展示，不在这里发起处理。 */
 function OpenedTask({
   taskId,
   onTaskChange,
-  onClose,
+  onBackToList,
 }: {
   taskId: string;
   onTaskChange: () => void;
-  onClose: () => void;
+  onBackToList: () => void;
 }) {
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -255,7 +260,7 @@ function OpenedTask({
     try {
       await deleteTask(taskId);
       onTaskChange();
-      onClose();
+      onBackToList();
     } catch (err) {
       setError(describeError(err).message);
     } finally {
@@ -265,55 +270,59 @@ function OpenedTask({
 
   if (error !== null && task === null) {
     return (
-      <section className="intake intake--failed">
-        <h2 className="intake-title">无法打开这条任务记录</h2>
-        <p className="detail-error">{error}</p>
-        <div className="actions">
-          <button type="button" className="btn btn--primary" onClick={() => void reload()}>
-            重新读取
-          </button>
-          <button type="button" className="btn" onClick={onClose}>
-            返回上传
-          </button>
+      <div className="page">
+        <div className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">无法打开这条任务记录</h2>
+          </div>
+          <p className="detail-error">{error}</p>
+          <div className="actions mt-lg">
+            <button type="button" className="btn btn--primary" onClick={() => void reload()}>
+              重新读取
+            </button>
+            <button type="button" className="btn" onClick={onBackToList}>
+              返回任务列表
+            </button>
+          </div>
         </div>
-      </section>
+      </div>
     );
   }
 
   if (task === null) return <p className="hint">正在读取任务记录…</p>;
 
+  const hasReport = Boolean(task.review?.result);
+
   return (
-    <>
-      <p className="opened-note">
-        正在查看历史任务的处理结果。需要重新处理新的录屏时，请使用侧栏的
-        <strong> 新建上传任务</strong>。
-      </p>
-      <TaskSummary
-        task={task}
-        actions={{
-          onRetry: () => void retry(),
-          onDelete: () => void remove(),
-          onReset: onClose,
-          deleting,
-        }}
-        understanding={understanding}
-        review={review}
-        refreshKey={understanding.refreshKey}
-        onTask={setTask}
-      />
-      {error !== null && <p className="detail-error">{error}</p>}
-    </>
+    <TaskDetailPage
+      task={task}
+      actions={{
+        onRetry: () => void retry(),
+        onDelete: () => void remove(),
+        onReset: onBackToList,
+        deleting,
+        hasReport,
+        onDownloadReport: () => window.open(reviewDownloadUrl(task.id), "_blank"),
+      }}
+      understanding={understanding}
+      review={review}
+      refreshKey={understanding.refreshKey}
+      onTask={setTask}
+    />
   );
 }
 
 export default function Workbench({
   taskId,
   onTaskChange,
+  onBackToList,
 }: {
   /** 非空时展示这条历史任务，否则展示本次上传流程。 */
   taskId: string | null;
-  /** 任务创建、重试或删除后通知外层刷新历史记录。 */
+  /** 任务创建、重试或删除后通知外层刷新最近任务。 */
   onTaskChange?: () => void;
+  /** 回到新建任务页（详情页的「返回任务列表」） */
+  onBackToList: () => void;
 }) {
   const [state, setState] = useState<UploadState>(INITIAL);
   const [task, setTask] = useState<Task | null>(null);
@@ -321,6 +330,7 @@ export default function Workbench({
   // 用 nonce 而不是 taskId 本身，使「重试同一个任务」也能重新启动轮询循环。
   const [watching, setWatching] = useState<{ taskId: string; nonce: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   // 识别操作与结果刷新：切分完成后即可在本页直接启动识别，不必走历史记录
   const understanding = useUnderstanding(task, setTask, (message) =>
@@ -505,7 +515,7 @@ export default function Workbench({
     }
   }, [fail, finishSession, watchProcessing]);
 
-  /** 用户点「继续上传」：服务端留着已收分片，补传缺的那些即可。 */
+  /** 用户重新选文件：服务端留着已收分片，补传缺的那些即可。 */
   const continueUpload = async (file: File) => {
     const record = loadPendingUpload();
     if (record === null) return;
@@ -529,7 +539,7 @@ export default function Workbench({
     });
   }, [restoreSession]);
 
-  const handleFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) void start(file);
   };
@@ -538,7 +548,7 @@ export default function Workbench({
    *
    * 没有本地 `File` 对象就无法补传——重开页面后那份 1～2GB 的内容只在用户磁盘上，
    * 浏览器不会为它保留句柄，因此这里必须由用户重新选一次。 */
-  const handleContinueFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleContinueFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) void continueUpload(file);
   };
@@ -563,6 +573,7 @@ export default function Workbench({
     clearPendingUpload();
     if (fileRef.current) fileRef.current.value = "";
     onTaskChange?.();
+    onBackToList();
   };
 
   /** 删除已上传视频：由后端清除云端对象、本地分片与记录，成功后回到初始态。 */
@@ -586,94 +597,49 @@ export default function Workbench({
   };
 
   if (taskId !== null) {
-    // key 让切换到另一条历史记录时丢掉上一条的界面状态
-    return <OpenedTask key={taskId} taskId={taskId} onTaskChange={onTaskChange ?? (() => {})} onClose={() => handleReset()} />;
+    // key 让切换到另一条记录时丢掉上一条的界面状态
+    return (
+      <OpenedTask
+        key={taskId}
+        taskId={taskId}
+        onTaskChange={onTaskChange ?? (() => {})}
+        onBackToList={onBackToList}
+      />
+    );
   }
 
   const percent = state.totalBytes > 0 ? Math.round((state.sentBytes / state.totalBytes) * 100) : 0;
-  // 查进度与等待用户重选文件这两段时间没有字节在动，不该显示进度条
-  const checking = state.phase === "loading" || state.phase === "unfinished";
   const busy = state.phase === "uploading" || state.phase === "assembling";
-  const failed = state.phase === "error";
+
+  /** 拖拽落盘：与点击选择走同一条路径，续传态下同样是「补传缺片」。 */
+  const onDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setDragOver(false);
+    if (busy) return;
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (state.phase === "unfinished") void continueUpload(file);
+    else void start(file);
+  };
+
+  const onDragOver = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (!busy) setDragOver(true);
+  };
+
+  const onDragLeave = () => setDragOver(false);
+
+  /** 点「选择文件 / 开始处理」：交给同一个文件输入框，不重复实现选择逻辑。 */
+  const onPick = () => fileRef.current?.click();
+
+  // 上传阶段之外（已入库、处理中或已完成）展示任务详情；上传阶段展示上传页
+  const showDetail = !busy && task !== null;
+  const inputId = state.phase === "unfinished" ? "continue-file" : "clip-file";
 
   return (
     <div className="workbench">
-      <input
-        ref={fileRef}
-        id="clip-file"
-        className="visually-hidden"
-        type="file"
-        accept="video/*,.ts,.mp4"
-        onChange={handleFile}
-        disabled={busy || checking}
-        aria-label="选择录屏文件"
-      />
-
-      {state.phase === "idle" && (
-        <section className="intake">
-          <h2 className="intake-title">上传一场直播录屏</h2>
-          <p className="intake-lead">
-            支持 TS 与 MP4，典型体积 1～2GB。上传完成后后台会自动完成媒体探测、格式处理与切片；
-            关掉本页不影响已上传的部分，回来接着传即可。
-          </p>
-          {/* label 关联到文件输入：点击整块区域即可选文件，键盘也能聚焦 */}
-          <label className="file-picker" htmlFor="clip-file">
-            <span className="file-picker-mark" aria-hidden="true" />
-            <span className="file-picker-text">
-              <strong>选择录屏文件</strong>
-              <span>TS / MP4，单文件，建议不超过 2GB</span>
-            </span>
-          </label>
-        </section>
-      )}
-
-      {state.phase === "loading" && <p className="hint">正在检查有没有没传完的上传…</p>}
-
-      {state.phase === "unfinished" && (
-        <section className="intake">
-          <h2 className="intake-title">这次上传还没传完</h2>
-          <p className="hint">
-            文件：{state.fileName} · 已传 {formatBytes(state.sentBytes)} /{" "}
-            {formatBytes(state.totalBytes)}
-          </p>
-          {state.error && <p className="detail-error">{state.error}</p>}
-          <p className="intake-lead">
-            已传的分片留在服务端，重新选择同一个文件只会补传缺的部分，不会从头再传一遍。
-          </p>
-          <label className="file-picker" htmlFor="continue-file">
-            <span className="file-picker-mark" aria-hidden="true" />
-            <span className="file-picker-text">
-              <strong>选择同一个文件继续上传</strong>
-              <span>只是补齐缺失分片，已传部分不会重传</span>
-            </span>
-          </label>
-          <input
-            id="continue-file"
-            className="visually-hidden"
-            type="file"
-            accept="video/*,.ts,.mp4"
-            onChange={handleContinueFile}
-            aria-label="选择同一个文件继续上传"
-          />
-          <div className="actions">
-            <button type="button" className="btn" onClick={handleReset}>
-              放弃这次上传
-            </button>
-          </div>
-        </section>
-      )}
-
-      {busy && (
-        <UploadProgress
-          percent={percent}
-          sentBytes={state.sentBytes}
-          totalBytes={state.totalBytes}
-          assembling={state.phase === "assembling"}
-        />
-      )}
-
-      {!busy && task && (
-        <TaskSummary
+      {showDetail ? (
+        <TaskDetailPage
           task={task}
           notice={task.error ? null : state.error}
           actions={{
@@ -681,30 +647,33 @@ export default function Workbench({
             onDelete: handleDelete,
             onReset: handleReset,
             deleting,
+            hasReport: Boolean(task.review?.result),
+            onDownloadReport: () => window.open(reviewDownloadUrl(task.id), "_blank"),
           }}
           understanding={understanding}
           review={review}
           refreshKey={understanding.refreshKey}
           onTask={setTask}
         />
-      )}
-
-      {failed && (
-        <section className="intake intake--failed">
-          <h2 className="intake-title">上传未完成</h2>
-          {state.fileName && <p className="hint">文件：{state.fileName}</p>}
-          <p className="detail-error">{state.error}</p>
-          {state.missingChunks.length > 0 && (
-            <p className="hint">
-              缺少 {state.missingChunks.length} 个分片。重新选择同一文件可继续补齐，已上传的分片不会重传。
-            </p>
-          )}
-          <div className="actions">
-            <button type="button" className="btn btn--primary" onClick={handleReset}>
-              重新发起上传
-            </button>
-          </div>
-        </section>
+      ) : (
+        <IntakePage
+          phase={state.phase === "watching" || state.phase === "done" ? "idle" : state.phase}
+          fileName={state.fileName}
+          totalBytes={state.totalBytes}
+          sentBytes={state.sentBytes}
+          percent={percent}
+          error={state.error}
+          missingChunks={state.missingChunks}
+          dragOver={dragOver}
+          inputId={inputId}
+          inputRef={fileRef}
+          onPick={onPick}
+          onFile={state.phase === "unfinished" ? handleContinueFile : handleFile}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          onCancel={handleReset}
+        />
       )}
 
       {state.phase === "done" && task === null && (

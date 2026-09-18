@@ -59,14 +59,50 @@ export function reviewStatusLabel(status: string | null): string {
  *
  * 等级由程序按覆盖面和模型判断共同确定，取值来自 `app/tasks/review.py` 的兜底逻辑。
  */
-export function reviewLevelTone(level: string): "ok" | "attention" | undefined {
+export function reviewLevelTone(level: string): "ok" | "warn" | undefined {
   if (level === "完整") return "ok";
-  if (level === "部分" || level === "受限") return "attention";
+  if (level === "部分" || level === "受限") return "warn";
   return undefined;
 }
 
 export function taskStatusLabel(status: string): string {
   return TASK_LABELS[status] ?? status;
+}
+
+/**
+ * 任务状态在界面上的语气：只在成功时是健康态。
+ *
+ * 取值与 `.status` 的 `data-tone` 一一对应（ok / busy / warn / error），
+ * 状态色只表达状态，不作为装饰。
+ */
+export function taskStatusTone(status: string): "ok" | "busy" | "warn" | "error" {
+  if (status === "succeeded") return "ok";
+  if (status === "failed") return "error";
+  if (status === "processing" || status === "uploading") return "busy";
+  return "warn";
+}
+
+/** 切片状态：已上传是终态成功，失败要显式可见，其余是「还没轮到」。 */
+export function clipStatusTone(status: string): "ok" | "busy" | "warn" | "error" {
+  if (status === "uploaded") return "ok";
+  if (status === "failed") return "error";
+  return "warn";
+}
+
+/** 识别状态：pending 是「未开始」，running 是进行中，成功与失败各有语气。 */
+export function understandingStatusTone(status: string): "ok" | "busy" | "warn" | "error" {
+  if (status === "succeeded") return "ok";
+  if (status === "failed") return "error";
+  if (status === "running") return "busy";
+  return "warn";
+}
+
+/** 复盘状态：与识别分开，因为「识别成功但复盘失败」是常见情况。 */
+export function reviewStatusTone(status: string): "ok" | "busy" | "warn" | "error" {
+  if (status === "succeeded") return "ok";
+  if (status === "failed") return "error";
+  if (status === "running") return "busy";
+  return "warn";
 }
 
 export function formatBytes(bytes: number): string {
@@ -101,11 +137,6 @@ export function formatChannels(channels: number | null): string {
 export function describeTask(task: Task): string {
   const label = taskStatusLabel(task.status);
   return task.progress > 0 && task.status === "processing" ? `${label} ${task.progress}%` : label;
-}
-
-/** 只有成功是健康态，其余都需留意。 */
-export function taskState(task: Task): "ok" | "attention" {
-  return task.status === "succeeded" ? "ok" : "attention";
 }
 
 /** 片段在原视频中的时间范围：核对时间对应关系靠的就是它。 */

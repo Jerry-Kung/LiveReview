@@ -231,7 +231,8 @@ describe("上传与任务链路", () => {
 
     // 不必再选一次文件：分片已经全在服务端，剩下的是后端的事
     await waitFor(() => expect(completed).toBe(1));
-    expect(await screen.findByText(/正在处理/)).toBeInTheDocument();
+    // 进入任务详情：处理流程一栏给出当前状态
+    expect(await screen.findByText(/任务：处理中/)).toBeInTheDocument();
     // 凭据用完即清，下次打开页面不该再捡起这次上传
     expect(window.localStorage.getItem("livereview.pending-upload")).toBeNull();
   });
@@ -565,6 +566,8 @@ describe("切分结果展示", () => {
 
   beforeEach(() => {
     globalThis.fetch = vi.fn();
+    // 路由写在 hash 上：逐用例复位，免得上一个用例留下的视图影响下一个
+    window.location.hash = "";
   });
 
   afterEach(() => {
@@ -594,7 +597,7 @@ describe("切分结果展示", () => {
     selectFile();
 
     expect(await screen.findByText(/任务：已完成/)).toBeInTheDocument();
-    const split = screen.getByLabelText("切分结果");
+    const split = screen.getByLabelText("切分结果", { selector: "section" });
     const values = Array.from(split.querySelectorAll("dd")).map((node) => node.textContent);
     expect(values).toEqual(["2", "1:02:05", "通过"]);
   });
@@ -656,7 +659,7 @@ describe("切分结果展示", () => {
 
     await waitFor(() => expect(screen.getByText(/失败原因：SplitError/)).toBeInTheDocument());
     expect(screen.getByText(/缺失 37.5s/)).toBeInTheDocument();
-    expect(screen.getByLabelText("切分结果").textContent).toContain("1 处问题");
+    expect(screen.getByLabelText("切分结果", { selector: "section" }).textContent).toContain("1 处问题");
   });
 
   it("片段上传失败时展示该片段的原因", async () => {
@@ -707,6 +710,8 @@ describe("工作台壳层", () => {
 
   beforeEach(() => {
     globalThis.fetch = vi.fn();
+    // 路由写在 hash 上：逐用例复位，免得上一个用例留下的视图影响下一个
+    window.location.hash = "";
   });
 
   afterEach(() => {
@@ -714,11 +719,11 @@ describe("工作台壳层", () => {
     vi.restoreAllMocks();
   });
 
-  it("页眉展示项目中文名称与用户登录入口", async () => {
+  it("页眉展示品牌与用户登录入口", async () => {
     mockApi([healthRoute]);
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: "直播视频复盘分析工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "LiveReview" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用户登录" })).toBeInTheDocument();
     expect(screen.queryByText("后端")).not.toBeInTheDocument();
   });
@@ -737,7 +742,7 @@ describe("工作台壳层", () => {
     // 弹层关闭，页眉改为账号态
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("林可")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "退出" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /林可/ })).toBeInTheDocument();
   });
 
   it("账号为空时不进入账号态并给出提示", async () => {
@@ -748,10 +753,10 @@ describe("工作台壳层", () => {
     fireEvent.click(screen.getByRole("button", { name: "进入工作台" }));
 
     expect(screen.getByText("请填写登录账号。")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "退出" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /林可/ })).not.toBeInTheDocument();
   });
 
-  it("侧栏历史记录列出既有任务，点击后在工作区展示该任务结果", async () => {
+  it("侧栏最近任务列出既有任务，点击后在工作区展示该任务结果", async () => {
     const history = taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })]);
     mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, history) : undefined)], [
       history,
@@ -762,20 +767,20 @@ describe("工作台壳层", () => {
     const item = await screen.findByRole("button", { name: /live\.ts/ });
     fireEvent.click(item);
 
-    await waitFor(() =>
-      expect(screen.getByText(/正在查看历史任务的处理结果/)).toBeInTheDocument()
-    );
+    // 打开后进入任务详情：返回入口、任务名与媒体信息都在
+    expect(await screen.findByRole("button", { name: "返回任务列表" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "live.ts" })).toBeInTheDocument();
     expect(screen.getByLabelText("媒体信息")).toBeInTheDocument();
   });
 
-  it("没有历史任务时给出空态说明", async () => {
+  it("没有任务时给出空态说明", async () => {
     mockApi([healthRoute], []);
     render(<App />);
 
     expect(await screen.findByText(/还没有任务/)).toBeInTheDocument();
   });
 
-  it("历史记录读取失败时说明原因，不影响工作区上传入口", async () => {
+  it("任务列表读取失败时说明原因，不影响工作区上传入口", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith("/health")) return jsonResponse(200, HEALTH);

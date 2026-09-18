@@ -1,8 +1,9 @@
 /**
- * 应用壳层：页眉 + 侧栏（新建任务 / 历史记录）+ 主工作区。
+ * 应用壳层：页眉 + 侧栏（主导航 / 最近任务）+ 主工作区。
  *
- * 页面只做一件事——把一场录屏从上传带到切片结果。主区在三种内容之间切换：
- * 上传入口、上传与处理过程、从历史记录里打开的一个既有任务。
+ * 主区按 hash 路由显示三种内容：新建任务页、从最近任务里打开的一条既有任务、以及两个
+ * 预留功能页（数据分析 / 设置，本版没有后端能力，只给出说明页）。本业务链路始终是
+ * 「上传 → 处理 → 结果」，路由只负责决定当前看哪一屏。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -10,17 +11,44 @@ import Header, { type SessionUser } from "./Header";
 import LoginDialog from "./LoginDialog";
 import Sidebar from "./Sidebar";
 import Workbench from "./Workbench";
+import { IconChart, IconSettings } from "./icons";
+import { useRoute } from "./routing";
 import { fetchTasks, type Task } from "./api";
+
+/** 预留功能页：说明「这里会有什么、现在为什么没有」，不假装功能已存在。 */
+function PlaceholderPage({
+  title,
+  note,
+  icon,
+}: {
+  title: string;
+  note: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="page">
+      <h2 className="page-title">{title}</h2>
+      <div className="panel">
+        <div className="placeholder">
+          {icon}
+          <p className="placeholder-title">该功能尚未接入</p>
+          <p className="placeholder-note">{note}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [user, setUser] = useState<SessionUser>(null);
+  const [query, setQuery] = useState("");
   // 递增计数：新建上传任务时让 Workbench 重挂载，丢掉上一次任务的界面状态
   const [intakeKey, setIntakeKey] = useState(0);
+  const { route, navigate } = useRoute();
 
   const loadTasks = useCallback(async () => {
     try {
@@ -28,8 +56,8 @@ export default function App() {
       setTasks(data.items);
       setHistoryError(null);
     } catch (err) {
-      // 历史记录读不到不影响主区的上传与处理，只在侧栏说明原因
-      setHistoryError(err instanceof Error ? err.message : "历史记录读取失败");
+      // 最近任务读不到不影响主区的上传与处理，只在侧栏说明原因
+      setHistoryError(err instanceof Error ? err.message : "任务列表读取失败");
     } finally {
       setHistoryLoading(false);
     }
@@ -40,19 +68,22 @@ export default function App() {
   }, [loadTasks]);
 
   const handleNewTask = () => {
-    setActiveTaskId(null);
     setIntakeKey((value) => value + 1);
+    navigate({ view: "new", taskId: null });
   };
 
   const openTask = (taskId: string) => {
-    setActiveTaskId(taskId);
     setIntakeKey((value) => value + 1);
+    navigate({ view: "task", taskId });
   };
 
   return (
     <div className="app">
       <Header
         user={user}
+        query={query}
+        onQuery={setQuery}
+        onNewTask={handleNewTask}
         onSignIn={() => setLoginOpen(true)}
         onSignOut={() => setUser(null)}
       />
@@ -62,13 +93,44 @@ export default function App() {
           tasks={tasks}
           loading={historyLoading}
           error={historyError}
-          activeId={activeTaskId}
-          onNewTask={handleNewTask}
+          activeTaskId={route.view === "task" ? route.taskId : null}
+          activeNav={route.view === "analytics" || route.view === "settings" ? route.view : "tasks"}
+          query={query}
           onOpenTask={openTask}
+          onSelectNav={(key) => {
+            if (key === "tasks") {
+              handleNewTask();
+              return;
+            }
+            navigate({ view: key, taskId: null });
+          }}
         />
 
         <main className="stage" aria-label="工作区">
-          <Workbench key={intakeKey} taskId={activeTaskId} onTaskChange={loadTasks} />
+          {route.view === "analytics" && (
+            <PlaceholderPage
+              title="数据分析"
+              note="按店铺、时段、主播汇总多场直播的复盘结论。需要先有多场已复盘的任务，且后端提供聚合接口。"
+              icon={<IconChart size={20} />}
+            />
+          )}
+
+          {route.view === "settings" && (
+            <PlaceholderPage
+              title="设置"
+              note="账号与权限、切片时长、模型选择等运行参数。当前这些取值由后端配置文件决定，界面暂不提供修改入口。"
+              icon={<IconSettings size={20} />}
+            />
+          )}
+
+          {(route.view === "new" || route.view === "task") && (
+            <Workbench
+              key={`${intakeKey}-${route.taskId ?? "new"}`}
+              taskId={route.taskId}
+              onTaskChange={loadTasks}
+              onBackToList={handleNewTask}
+            />
+          )}
         </main>
       </div>
 

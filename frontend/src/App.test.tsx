@@ -18,6 +18,8 @@ describe("App 壳层", () => {
 
   beforeEach(() => {
     globalThis.fetch = vi.fn();
+    // 路由写在 hash 上：逐用例复位，免得上一个用例留下的视图影响下一个
+    window.location.hash = "";
   });
 
   afterEach(() => {
@@ -29,7 +31,7 @@ describe("App 壳层", () => {
     mockApi();
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: "直播视频复盘分析工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "LiveReview" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用户登录" })).toBeInTheDocument();
     // 服务状态行已移除：不再有后端、对象存储、版本这些内部字样
     expect(screen.queryByText("后端")).not.toBeInTheDocument();

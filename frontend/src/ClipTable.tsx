@@ -12,10 +12,12 @@ import {
   CLIP_STATUS_LABELS,
   PLACEHOLDER,
   clipNumber,
+  clipStatusTone,
   formatBytes,
   formatClipRange,
   formatDuration,
 } from "./format";
+import { IconAlert, IconCheckCircle } from "./icons";
 
 /** 比例条：把片段起止换算成整场时长上的百分比区间。 */
 function axisGeometry(clip: TaskClip, totalSeconds: number): { offset: number; width: number } | null {
@@ -38,64 +40,64 @@ export default function ClipTable({
   const total = coverage.source_duration_seconds ?? 0;
 
   return (
-    <table className="clips clips--split">
-      <caption>
-        切片列表（按原视频时间顺序），共 {coverage.clip_count} 片
-        {coverage.issues.length > 0 ? `，覆盖校验 ${coverage.issues.length} 处问题` : "，覆盖校验通过"}
-      </caption>
-      <thead>
-        <tr>
-          <th scope="col" className="col-index">
-            序号
-          </th>
-          <th scope="col" className="col-time">
-            原视频时间范围
-          </th>
-          <th scope="col" className="col-axis">
-            在整场中的位置
-          </th>
-          <th scope="col" className="col-duration">
-            时长
-          </th>
-          <th scope="col" className="col-size">
-            体积
-          </th>
-          <th scope="col" className="col-status">
-            处理状态
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {clips.map((clip) => {
-          const geometry = axisGeometry(clip, total);
-          return (
-            <tr key={clip.index} data-state={clip.status === "failed" ? "attention" : undefined}>
-              <td className="cell-num">{clipNumber(clip.index)}</td>
-              <td className="cell-time">{formatClipRange(clip.start_seconds, clip.end_seconds)}</td>
-              <td className="cell-axis">
-                {geometry ? (
-                  <span className="axis" aria-hidden="true">
-                    <span
-                      className="axis-span"
-                      style={{ left: `${geometry.offset}%`, width: `${geometry.width}%` }}
-                    />
+    <div className="table-wrap mt-lg">
+      <table className="table clips clips--split">
+        <caption>
+          切片列表（按原视频时间顺序），共 {coverage.clip_count} 片
+          {coverage.issues.length > 0
+            ? `，覆盖校验 ${coverage.issues.length} 处问题`
+            : "，覆盖校验通过"}
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col" className="cell-index">
+              序号
+            </th>
+            <th scope="col">时间范围</th>
+            <th scope="col" className="cell-axis">
+              在整场中的位置
+            </th>
+            <th scope="col">时长</th>
+            <th scope="col">文件大小</th>
+            <th scope="col">状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          {clips.map((clip) => {
+            const geometry = axisGeometry(clip, total);
+            const tone = clipStatusTone(clip.status);
+            return (
+              <tr key={clip.index} data-state={clip.status === "failed" ? "attention" : undefined}>
+                <td className="cell-num cell-index">{clipNumber(clip.index)}</td>
+                <td className="cell-time">{formatClipRange(clip.start_seconds, clip.end_seconds)}</td>
+                <td className="cell-axis">
+                  {geometry ? (
+                    <span className="axis" aria-hidden="true">
+                      <span
+                        className="axis-span"
+                        style={{ left: `${geometry.offset}%`, width: `${geometry.width}%` }}
+                      />
+                    </span>
+                  ) : (
+                    PLACEHOLDER
+                  )}
+                </td>
+                <td className="cell-num">{formatDuration(clip.duration_seconds)}</td>
+                <td className="cell-num">
+                  {clip.size_bytes === null ? PLACEHOLDER : formatBytes(clip.size_bytes)}
+                </td>
+                <td>
+                  <span className="cell-status" data-tone={tone}>
+                    {tone === "ok" ? <IconCheckCircle size={16} /> : <IconAlert size={16} />}
+                    {CLIP_STATUS_LABELS[clip.status] ?? clip.status}
                   </span>
-                ) : (
-                  PLACEHOLDER
-                )}
-              </td>
-              <td className="cell-num">{formatDuration(clip.duration_seconds)}</td>
-              <td className="cell-num">
-                {clip.size_bytes === null ? PLACEHOLDER : formatBytes(clip.size_bytes)}
-              </td>
-              <td>
-                {CLIP_STATUS_LABELS[clip.status] ?? clip.status}
-                {clip.error && <span className="clip-error">{clip.error}</span>}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                  {clip.error && <span className="clip-error">{clip.error}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

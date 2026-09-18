@@ -26,7 +26,9 @@ import {
   formatTimestamp,
   reviewLevelTone,
   reviewStatusLabel,
+  reviewStatusTone,
 } from "./format";
+import { IconReport } from "./icons";
 
 /** 分析等级在界面上的说明：等级决定了哪些结论可以逐句评价。 */
 const LEVEL_NOTES: Record<string, string> = {
@@ -42,37 +44,31 @@ function moment(seconds: number | null): string {
 /** 汇总：状态、覆盖面、模型、完成时间。 */
 function Summary({ review }: { review: TaskReview }) {
   const level = review.result?.analysis_level ?? "";
+  const facts: Array<[string, string, "ok" | "busy" | "warn" | "error" | null]> = [
+    ["复盘状态", reviewStatusLabel(review.status), reviewStatusTone(review.status)],
+    ["分析等级", level || PLACEHOLDER, reviewLevelTone(level) ?? null],
+    ["投入分析", `${review.segment_count} 条语音记录`, null],
+    ["调用批次", review.batch_count > 1 ? `${review.batch_count}（长转写分批）` : `${review.batch_count || PLACEHOLDER}`, null],
+    ["完成时间", formatMoment(review.finished_at), null],
+    ["模型", review.model_name ?? PLACEHOLDER, null],
+  ];
+
   return (
-    <dl className="metadata metadata--split" aria-label="复盘汇总">
-      <div className="metadata-item">
-        <dt>复盘状态</dt>
-        <dd data-state={review.status === "succeeded" ? "ok" : "attention"}>
-          {reviewStatusLabel(review.status)}
-        </dd>
-      </div>
-      <div className="metadata-item">
-        <dt>分析等级</dt>
-        <dd data-state={reviewLevelTone(level)}>{level || PLACEHOLDER}</dd>
-      </div>
-      <div className="metadata-item">
-        <dt>投入分析</dt>
-        <dd>{review.segment_count} 条语音记录</dd>
-      </div>
-      <div className="metadata-item">
-        <dt>调用批次</dt>
-        <dd>
-          {review.batch_count || PLACEHOLDER}
-          {review.batch_count > 1 && <span className="hint-inline">（长转写分批）</span>}
-        </dd>
-      </div>
-      <div className="metadata-item">
-        <dt>完成时间</dt>
-        <dd>{formatMoment(review.finished_at)}</dd>
-      </div>
-      <div className="metadata-item">
-        <dt>模型</dt>
-        <dd>{review.model_name ?? PLACEHOLDER}</dd>
-      </div>
+    <dl className="facts-grid" aria-label="复盘汇总">
+      {facts.map(([label, value, tone]) => (
+        <div key={label}>
+          <dt className="fact-label">{label}</dt>
+          <dd className="fact-value">
+            {tone === null ? (
+              value
+            ) : (
+              <span className="status" data-tone={tone}>
+                {value}
+              </span>
+            )}
+          </dd>
+        </div>
+      ))}
     </dl>
   );
 }
@@ -89,15 +85,15 @@ function Report({ result }: { result: ReviewResult }) {
         </p>
       )}
 
-      <section className="report-part">
-        <h4 className="report-title">本场一句话结论</h4>
+      <section>
+        <h4 className="subsection-title mt-lg">本场一句话结论</h4>
         <p className="report-one-line">{result.one_line || "（模型未给出结论）"}</p>
       </section>
 
-      <section className="report-part">
-        <h4 className="report-title">
+      <section className="subsection">
+        <h4 className="subsection-title">
           关键事件
-          <span className="report-count">{result.key_events.length} 条</span>
+          <span className="subsection-count num">{result.key_events.length} 条</span>
         </h4>
         {result.key_events.length === 0 ? (
           <p className="hint">未识别出关键事件。</p>
@@ -114,10 +110,10 @@ function Report({ result }: { result: ReviewResult }) {
         )}
       </section>
 
-      <section className="report-part">
-        <h4 className="report-title">
+      <section className="subsection">
+        <h4 className="subsection-title">
           分析发现
-          <span className="report-count">{result.findings.length} 条</span>
+          <span className="subsection-count num">{result.findings.length} 条</span>
         </h4>
         {result.findings.length === 0 ? (
           <p className="hint">未给出分析发现。</p>
@@ -146,10 +142,10 @@ function Report({ result }: { result: ReviewResult }) {
         )}
       </section>
 
-      <section className="report-part">
-        <h4 className="report-title">
+      <section className="subsection">
+        <h4 className="subsection-title">
           本场 TOP 问题
-          <span className="report-count">{result.top_issues.length} 条</span>
+          <span className="subsection-count num">{result.top_issues.length} 条</span>
         </h4>
         {result.top_issues.length === 0 ? (
           <p className="hint">未给出需要优先处理的问题。</p>
@@ -190,10 +186,10 @@ function Report({ result }: { result: ReviewResult }) {
         )}
       </section>
 
-      <section className="report-part">
-        <h4 className="report-title">
+      <section className="subsection">
+        <h4 className="subsection-title">
           下一场实验动作
-          <span className="report-count">{result.next_actions.length} 条</span>
+          <span className="subsection-count num">{result.next_actions.length} 条</span>
         </h4>
         {result.next_actions.length === 0 ? (
           <p className="hint">未给出下一场实验动作。</p>
@@ -212,8 +208,8 @@ function Report({ result }: { result: ReviewResult }) {
 
       {/* 缺口放在结论之后、单独成块：用户读完结论就能看到它的边界在哪 */}
       {result.missing_info.length > 0 && (
-        <section className="report-part report-part--gap">
-          <h4 className="report-title">本场不足以判断</h4>
+        <section className="subsection report-part--gap">
+          <h4 className="subsection-title">本场不足以判断</h4>
           <ul className="gaps">
             {result.missing_info.map((item, index) => (
               <li key={`${item}-${index}`}>{item}</li>
@@ -268,17 +264,24 @@ export default function ReviewBlock({
   const blocked = !hasClips ? "还没有切片，请先完成切分" : !understood ? "还没有识别结果，请先完成识别" : null;
 
   return (
-    <section className="block">
-      <h3 className="block-title">
-        <span className="block-no">4</span>
-        复盘结论
-      </h3>
+    <section className="panel" aria-label="复盘结论">
+      <div className="panel-head">
+        <IconReport size={18} />
+        <h3 className="panel-title">复盘结论</h3>
+        {review && (
+          <span className="panel-head-side">
+            <span className="status" data-tone={reviewStatusTone(review.status)}>
+              {reviewStatusLabel(review.status)}
+            </span>
+          </span>
+        )}
+      </div>
 
       {review && <Summary review={review} />}
 
-      {review?.error && <p className="detail-error">{review.error}</p>}
+      {review?.error && <p className="detail-error mt-md">{review.error}</p>}
 
-      <div className="actions actions--inline">
+      <div className="actions mt-lg">
         <button
           type="button"
           className="btn btn--primary"
@@ -318,7 +321,7 @@ export default function ReviewBlock({
       ) : (
         !running &&
         review?.status !== "succeeded" && (
-          <p className="hint">
+          <p className="hint mt-md">
             复盘会读取整场语音转写，按内容结构、产品讲解、互动、转化与表达方式给出分析与
             下一场动作；本版没有经营数据，结论不涉及在线、停留与转化效果。
           </p>

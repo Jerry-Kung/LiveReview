@@ -28,44 +28,42 @@ import {
   formatMoment,
   formatTimestamp,
   understandingStatusLabel,
+  understandingStatusTone,
 } from "./format";
-
-/** 任务级识别状态在界面上的语气：只有全部成功才是健康态。 */
-function statusTone(understanding: TaskUnderstanding): "ok" | "attention" {
-  return understanding.status === "succeeded" ? "ok" : "attention";
-}
+import { IconAlert, IconCheckCircle, IconVoice } from "./icons";
 
 /** 整场汇总：覆盖情况 + 起点终点时间，让「这一轮跑了多久」可见。 */
 function Summary({ understanding }: { understanding: TaskUnderstanding }) {
+  const facts: Array<[string, string, "ok" | "busy" | "warn" | "error" | null]> = [
+    ["识别状态", understandingStatusLabel(understanding.status), understandingStatusTone(understanding.status)],
+    [
+      "已识别片段",
+      understanding.failed_clip_count > 0
+        ? `${understanding.clip_count}（${understanding.failed_clip_count} 片失败）`
+        : `${understanding.clip_count}`,
+      null,
+    ],
+    ["语音记录", `${understanding.segment_count} 条`, null],
+    ["完成时间", formatMoment(understanding.finished_at), null],
+    ["模型", understanding.model_name ?? PLACEHOLDER, null],
+  ];
+
   return (
-    <dl className="metadata metadata--split" aria-label="识别汇总">
-      <div className="metadata-item">
-        <dt>识别状态</dt>
-        <dd data-state={statusTone(understanding)}>
-          {understandingStatusLabel(understanding.status)}
-        </dd>
-      </div>
-      <div className="metadata-item">
-        <dt>已识别片段</dt>
-        <dd>
-          {understanding.clip_count}
-          {understanding.failed_clip_count > 0 && (
-            <span className="clip-error">，{understanding.failed_clip_count} 片失败</span>
-          )}
-        </dd>
-      </div>
-      <div className="metadata-item">
-        <dt>语音记录</dt>
-        <dd>{understanding.segment_count} 条</dd>
-      </div>
-      <div className="metadata-item">
-        <dt>完成时间</dt>
-        <dd>{formatMoment(understanding.finished_at)}</dd>
-      </div>
-      <div className="metadata-item">
-        <dt>模型</dt>
-        <dd>{understanding.model_name ?? PLACEHOLDER}</dd>
-      </div>
+    <dl className="facts-grid" aria-label="识别汇总">
+      {facts.map(([label, value, tone]) => (
+        <div key={label}>
+          <dt className="fact-label">{label}</dt>
+          <dd className="fact-value">
+            {tone === null ? (
+              value
+            ) : (
+              <span className="status" data-tone={tone}>
+                {value}
+              </span>
+            )}
+          </dd>
+        </div>
+      ))}
     </dl>
   );
 }
@@ -115,7 +113,7 @@ function TranscriptPanel({
   };
 
   return (
-    <div className="transcript">
+    <div>
       <div className="transcript-head">
         <button
           type="button"
@@ -137,11 +135,11 @@ function TranscriptPanel({
         )}
       </div>
 
-      {open && error && <p className="detail-error">{error}</p>}
+      {open && error && <p className="detail-error mt-md">{error}</p>}
 
       {open && transcript && (
         <>
-          <p className="transcript-lead">
+          <p className="hint mt-md">
             共 {transcript.clip_count} 片，已识别 {transcript.succeeded_clip_count} 片
             {transcript.failed_clip_count > 0 && `，失败 ${transcript.failed_clip_count} 片`}
             ，语音 {transcript.segment_count} 条
@@ -189,79 +187,81 @@ function ClipUnderstandingTable({
   onRetry: (index: number) => void;
 }) {
   return (
-    <table className="clips clips--understanding">
-      <caption>片段识别明细（按原视频时间顺序）</caption>
-      <thead>
-        <tr>
-          <th scope="col" className="col-index">
-            序号
-          </th>
-          <th scope="col" className="col-time">
-            原视频时间范围
-          </th>
-          <th scope="col">识别状态</th>
-          <th scope="col" className="col-duration">
-            语音条数
-          </th>
-          <th scope="col" className="col-size">
-            请求次数
-          </th>
-          <th scope="col">完成时间</th>
-          <th scope="col">
-            <span className="visually-hidden">操作</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {clips.map((clip) => {
-          const status = clip.understanding_status ?? "pending";
-          const warnings = clip.understanding_warnings ?? [];
-          const failed = status === "failed";
-          // 可重试的前提是「片段已入库」；识别失败恰恰是最需要重试的情况，不能禁用
-          const retryable = clip.status === "uploaded";
-          const busy = status === "running";
-          return (
-            <tr key={clip.index} data-state={failed ? "attention" : undefined}>
-              <td className="cell-num">{clipNumber(clip.index)}</td>
-              <td className="cell-time">{formatClipRange(clip.start_seconds, clip.end_seconds)}</td>
-              <td>
-                {understandingStatusLabel(status)}
-                {clip.understanding_error && (
-                  <span className="clip-error">{clip.understanding_error}</span>
-                )}
-                {warnings.length > 0 && (
-                  <span className="clip-error">
-                    {warnings.length} 条记录被丢弃：{warnings[0]}
+    <div className="table-wrap">
+      <table className="table clips clips--understanding">
+        <caption>片段识别明细（按原视频时间顺序）</caption>
+        <thead>
+          <tr>
+            <th scope="col" className="cell-index">
+              序号
+            </th>
+            <th scope="col">原视频时间范围</th>
+            <th scope="col">识别状态</th>
+            <th scope="col">语音条数</th>
+            <th scope="col">请求次数</th>
+            <th scope="col">完成时间</th>
+            <th scope="col" className="cell-action">
+              <span className="visually-hidden">操作</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {clips.map((clip) => {
+            const status = clip.understanding_status ?? "pending";
+            const warnings = clip.understanding_warnings ?? [];
+            const failed = status === "failed";
+            // 可重试的前提是「片段已入库」；识别失败恰恰是最需要重试的情况，不能禁用
+            const retryable = clip.status === "uploaded";
+            const busy = status === "running";
+            const tone = understandingStatusTone(status);
+            return (
+              <tr key={clip.index} data-state={failed ? "attention" : undefined}>
+                <td className="cell-num cell-index">{clipNumber(clip.index)}</td>
+                <td className="cell-time">
+                  {formatClipRange(clip.start_seconds, clip.end_seconds)}
+                </td>
+                <td>
+                  <span className="cell-status" data-tone={tone}>
+                    {tone === "ok" ? <IconCheckCircle size={16} /> : <IconAlert size={16} />}
+                    {understandingStatusLabel(status)}
                   </span>
-                )}
-              </td>
-              <td className="cell-num">{clip.understanding_segment_count ?? 0}</td>
-              <td className="cell-num">{clip.understanding_attempts || PLACEHOLDER}</td>
-              <td className="cell-time">{formatMoment(clip.understanding_at ?? null)}</td>
-              <td>
-                <button
-                  type="button"
-                  className="btn btn--flat"
-                  disabled={!retryable || busy || busyIndex !== null}
-                  onClick={() => onRetry(clip.index)}
-                  title={
-                    !retryable
-                      ? "该片段尚未成功入库，无法识别"
-                      : busy
-                        ? "该片段正在识别中"
-                        : failed
-                          ? "重新识别这一片（只重发这一片）"
-                          : "重新识别这一片"
-                  }
-                >
-                  {busyIndex === clip.index ? "识别中…" : "重新识别"}
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                  {clip.understanding_error && (
+                    <span className="clip-error">{clip.understanding_error}</span>
+                  )}
+                  {warnings.length > 0 && (
+                    <span className="clip-error">
+                      {warnings.length} 条记录被丢弃：{warnings[0]}
+                    </span>
+                  )}
+                </td>
+                <td className="cell-num">{clip.understanding_segment_count ?? 0}</td>
+                <td className="cell-num">{clip.understanding_attempts || PLACEHOLDER}</td>
+                <td className="cell-time">{formatMoment(clip.understanding_at ?? null)}</td>
+                <td className="cell-action">
+                  <button
+                    type="button"
+                    className="btn btn--flat"
+                    disabled={!retryable || busy || busyIndex !== null}
+                    onClick={() => onRetry(clip.index)}
+                    title={
+                      !retryable
+                        ? "该片段尚未成功入库，无法识别"
+                        : busy
+                          ? "该片段正在识别中"
+                          : failed
+                            ? "重新识别这一片（只重发这一片）"
+                            : "重新识别这一片"
+                    }
+                  >
+                    {busyIndex === clip.index ? "识别中…" : "重新识别"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -293,17 +293,24 @@ export default function UnderstandingBlock({
     understanding.failed_clip_count === 0;
 
   return (
-    <section className="block">
-      <h3 className="block-title">
-        <span className="block-no">3</span>
-        识别结果
-      </h3>
+    <section className="panel" aria-label="识别结果">
+      <div className="panel-head">
+        <IconVoice size={18} />
+        <h3 className="panel-title">识别结果</h3>
+        {understanding && (
+          <span className="panel-head-side">
+            <span className="status" data-tone={understandingStatusTone(understanding.status)}>
+              {understandingStatusLabel(understanding.status)}
+            </span>
+          </span>
+        )}
+      </div>
 
       {understanding && <Summary understanding={understanding} />}
 
-      {understanding?.error && <p className="detail-error">{understanding.error}</p>}
+      {understanding?.error && <p className="detail-error mt-md">{understanding.error}</p>}
 
-      <div className="actions actions--inline">
+      <div className="actions mt-lg">
         <button
           type="button"
           className="btn btn--primary"
@@ -314,21 +321,31 @@ export default function UnderstandingBlock({
           {running ? "识别中…" : allDone ? "重新检查识别结果" : "开始识别语音"}
         </button>
         {running && understanding && (
-          <span className="hint">整场识别进度 {understanding.progress}%，可以关闭页面，稍后回来看</span>
+          <span className="hint">
+            整场识别进度 {understanding.progress}%，可以关闭页面，稍后回来看
+          </span>
         )}
         {!hasClips && <span className="hint">该任务尚无切片，切分完成后才能识别</span>}
       </div>
 
       {hasClips && (
-        <ClipUnderstandingTable
-          clips={clips}
-          busyIndex={actions.retryingIndex}
-          onRetry={actions.onRetryClip}
-        />
+        <div className="subsection">
+          <h4 className="subsection-title">
+            片段识别明细
+            <span className="subsection-count num">{clips.length}</span>
+          </h4>
+          <ClipUnderstandingTable
+            clips={clips}
+            busyIndex={actions.retryingIndex}
+            onRetry={actions.onRetryClip}
+          />
+        </div>
       )}
 
       {understanding && (understanding.clip_count > 0 || understanding.failed_clip_count > 0) && (
-        <TranscriptPanel taskId={task.id} refreshKey={refreshKey} disabled={Boolean(running)} />
+        <div className="subsection">
+          <TranscriptPanel taskId={task.id} refreshKey={refreshKey} disabled={Boolean(running)} />
+        </div>
       )}
     </section>
   );
