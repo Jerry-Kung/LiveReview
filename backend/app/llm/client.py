@@ -22,11 +22,13 @@ from typing import Any, Callable
 from app.llm.base import (
     LLMClientError,
     LLMConfig,
+    LLMError,
     LLMServerError,
     LLMTimeoutError,
+    ReviewResult,
     UnderstandingResult,
 )
-from app.llm.parsing import parse_response
+from app.llm.parsing import parse_response, parse_review_response
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,65 @@ def _response_error_text(response: Any) -> str:
     if isinstance(message, str) and message.strip():
         return message.strip()
     return str(error)
+
+
+def _wrap_call_error(exc: BaseException, *, timeout_seconds: int) -> LLMError:
+    """把 SDK 异常收敛为领域异常。
+
+    分类决定「能不能重试」：超时、限流与 5xx 是瞬时故障，退避后重试有意义；4xx 中除限流
+    外、连接失败与未知异常都归为请求侧问题，重试无用。
+    """
+    openai = _import_openai()
+    if isinstance(exc, openai.APITimeoutError):
+        return LLMTimeoutError(f"模型请求超时（{timeout_seconds}s）")
+    if isinstance(exc, openai.APIConnectionError):
+        return LLMClientError(f"无法连接模型服务：{exc}")
+    if isinstance(exc, openai.APIStatusError):
+        status_code, code, request_id = _error_meta(exc)
+        if status_code is not None and status_code in _RETRYABLE_STATUS_CODES:
+            return LLMServerError(
+                "模型服务返回可重试错误",
+                status_code=status_code,
+                code=code,
+                request_id=request_id,
+            )
+        return LLMClientError(
+            f"模型服务拒绝了本次请求：status_code={status_code}，code={code}"
+        )
+    return LLMClientError(f"模型调用失败：{exc}")
+
+
+def _retry(call: Callable[[], Any], *, attempts: int, sleep: Callable[[float], None]) -> Any:
+    """按语义划分重试边界的通用重试：瞬时故障退避重试，请求侧问题直接抛出。
+
+    识别与复盘共用：两者的重试语义应当一致，分成两份实现迟早会漂移。
+    """
+    total = max(1, attempts)
+    last_error: BaseException | None = None
+
+    for attempt in range(1, total + 1):
+        try:
+            result = call()
+        except LLMClientError:
+            raise
+        except (LLMTimeoutError, LLMServerError) as exc:
+            last_error = exc
+        else:
+            result.attempts = attempt
+            return result
+
+        if attempt < total:
+            delay = min(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)), _BACKOFF_MAX_SECONDS)
+            logger.warning(
+                "第 %d 次尝试失败（%s），%.1fs 后重试",
+                attempt,
+                type(last_error).__name__,
+                delay,
+            )
+            sleep(delay)
+
+    assert last_error is not None
+    raise last_error
 
 
 class OpenAIUnderstandingClient:
@@ -114,32 +175,11 @@ class OpenAIUnderstandingClient:
         重试多少次都一样，直接抛出；超时、服务端错误与输出无法解析都可能是瞬时故障，
         按配置退避重试。
         """
-        attempts = max(1, self.config.max_attempts)
-        last_error: BaseException | None = None
 
-        for attempt in range(1, attempts + 1):
-            try:
-                result = self._call_once(video_url=video_url, prompt=prompt)
-            except LLMClientError:
-                raise
-            except (LLMTimeoutError, LLMServerError) as exc:
-                last_error = exc
-            else:
-                result.attempts = attempt
-                return result
+        def call() -> UnderstandingResult:
+            return self._call_once(video_url=video_url, prompt=prompt)
 
-            if attempt < attempts:
-                delay = min(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)), _BACKOFF_MAX_SECONDS)
-                logger.warning(
-                    "识别第 %d 次尝试失败（%s），%.1fs 后重试",
-                    attempt,
-                    type(last_error).__name__,
-                    delay,
-                )
-                self._sleep(delay)
-
-        assert last_error is not None
-        raise last_error
+        return _retry(call, attempts=self.config.max_attempts, sleep=self._sleep)
 
     def _call_once(self, *, video_url: str, prompt: str) -> UnderstandingResult:
         openai = _import_openai()
@@ -156,27 +196,8 @@ class OpenAIUnderstandingClient:
                     }
                 ],
             )
-        except openai.APITimeoutError as exc:
-            raise LLMTimeoutError(
-                f"识别请求超时（{self.config.timeout_seconds}s）"
-            ) from exc
-        except openai.APIConnectionError as exc:
-            raise LLMClientError(f"无法连接模型服务：{exc}") from exc
-        except openai.APIStatusError as exc:
-            status_code, code, request_id = _error_meta(exc)
-            # 4xx 中除限流外都是请求本身的问题，重试无用
-            if status_code is None or status_code not in _RETRYABLE_STATUS_CODES:
-                raise LLMClientError(
-                    f"模型服务拒绝了本次请求：status_code={status_code}，code={code}"
-                ) from exc
-            raise LLMServerError(
-                "模型服务返回可重试错误",
-                status_code=status_code,
-                code=code,
-                request_id=request_id,
-            ) from exc
         except Exception as exc:  # noqa: BLE001 —— SDK 异常面较宽，统一收敛为领域异常
-            raise LLMClientError(f"模型调用失败：{exc}") from exc
+            raise _wrap_call_error(exc, timeout_seconds=self.config.timeout_seconds) from exc
 
         status = getattr(response, "status", None)
         if status is not None and status != "completed":
@@ -189,3 +210,66 @@ class OpenAIUnderstandingClient:
             return parse_response(response)
         except ValueError as exc:
             raise LLMServerError(f"模型输出无法解析：{exc}") from exc
+
+
+class OpenAIReviewClient:
+    """复盘客户端（V0.3）：纯文本调用，契约与重试边界同识别客户端。
+
+    与识别客户端分开成两个类而不是一个「什么都能做」的客户端：输入形态（视频 vs 文本）、
+    超时量级与输出契约都不同，分开后各自的失败语义可以独立演化。两者共用同一份退避重试
+    策略与异常收敛，见 `_wrap_call_error` 与 `_retry`。
+    """
+
+    def __init__(self, config: LLMConfig, *, sleep: Callable[[float], None] | None = None) -> None:
+        self.config = config
+        self._sleep = sleep or time.sleep
+        self._client: Any | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            with self._lock:
+                if self._client is None:
+                    self._client = self._create_client()
+        return self._client
+
+    def _create_client(self) -> Any:
+        try:
+            openai = _import_openai()
+        except ImportError as exc:  # pragma: no cover —— 依赖缺失属部署问题
+            raise LLMClientError(
+                "未安装模型 SDK，请先安装依赖（openai>=1.40）后再启用复盘分析"
+            ) from exc
+        return openai.OpenAI(
+            base_url=self.config.base_url,
+            api_key=self.config.api_key,
+            timeout=self.config.review_timeout_seconds,
+            max_retries=0,
+        )
+
+    def review(self, *, system_prompt: str, user_prompt: str) -> ReviewResult:
+        """对一段转写文本执行一次复盘；重试语义与识别一致（见 `understand`）。"""
+
+        def call() -> ReviewResult:
+            return self._call_once(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        return _retry(call, attempts=self.config.review_max_attempts, sleep=self._sleep)
+
+    def _call_once(self, *, system_prompt: str, user_prompt: str) -> ReviewResult:
+        openai = _import_openai()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap_call_error(exc, timeout_seconds=self.config.review_timeout_seconds) from exc
+
+        try:
+            return parse_review_response(response)
+        except ValueError as exc:
+            raise LLMServerError(f"复盘输出无法解析：{exc}") from exc

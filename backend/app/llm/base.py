@@ -15,6 +15,12 @@ from typing import Any, Protocol
 # 识别状态常量的权威定义在 `app/models.py`（与切片状态同处），这里只做转发，
 # 使本包的使用方不必同时 import 两个模块。
 from app.models import (
+    REVIEW_SKIPPED,
+    REVIEW_STATUS_FAILED,
+    REVIEW_STATUS_PENDING,
+    REVIEW_STATUS_RUNNING,
+    REVIEW_STATUS_SUCCEEDED,
+    TERMINAL_REVIEW_STATUSES,
     TERMINAL_UNDERSTANDING_STATUSES,
     UNDERSTANDING_SKIPPED,
     UNDERSTANDING_STATUS_FAILED,
@@ -68,15 +74,23 @@ class LLMConfig:
     timeout_seconds: int = 900
     fps: float = 1.0
     max_attempts: int = 3
+    # 复盘调用（V0.3）：纯文本分析，超时按文本生成的量级给，与视频理解分开配置
+    review_timeout_seconds: int = 300
+    review_max_attempts: int = 3
 
 
 @dataclass(frozen=True)
 class SpeechSegment:
-    """一条人声语音：时间为**片段内的相对秒数**，对齐到原视频时间轴是调用方的事。"""
+    """一条人声语音：时间为**片段内的相对秒数**，对齐到原视频时间轴是调用方的事。
+
+    `tone` 是 V0.3 起模型对语气与情绪的主观估计，可空——缺失只意味着这条记录少一类线索，
+    不影响它作为语音证据本身的价值。
+    """
 
     start_seconds: float
     end_seconds: float
     content: str
+    tone: str = ""
 
 
 @dataclass
@@ -97,6 +111,29 @@ class UnderstandingClient(Protocol):
 
     def understand(self, *, video_url: str, prompt: str) -> UnderstandingResult:
         """对一段视频 URL 执行一次识别，返回解析后的语音记录。"""
+
+
+@dataclass
+class ReviewResult:
+    """一次复盘调用的产物：结构化结论 + 原始返回 + 用量。
+
+    `payload` 是**解析并归一后**的结论（字段齐备、缺失项已补默认值），`raw_text` 是模型
+    原样返回的文本。两者都留档：前者供界面渲染，后者用于「模型到底答了什么」的复核与
+    提示词调优——只留解析后的结果会让格式问题无从复现。
+    """
+
+    payload: dict[str, Any] = field(default_factory=dict)
+    raw_text: str = ""
+    usage: dict[str, Any] | None = None
+    warnings: list[str] = field(default_factory=list)
+    attempts: int = 1
+
+
+class ReviewClient(Protocol):
+    """复盘客户端契约：只做**纯文本**分析，输入是拼好的转写全文。"""
+
+    def review(self, *, system_prompt: str, user_prompt: str) -> ReviewResult:
+        """对一段转写文本执行一次复盘分析，返回结构化结论。"""
 
 
 def describe_error(exc: BaseException) -> str:

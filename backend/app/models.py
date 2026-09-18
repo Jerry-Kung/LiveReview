@@ -50,6 +50,20 @@ TERMINAL_UNDERSTANDING_STATUSES: frozenset[str] = frozenset(
 # 任务级识别状态额外多一个 `skipped`：切片尚未全部就绪时，本次没有任何可识别的输入
 UNDERSTANDING_SKIPPED = "skipped"
 
+# 复盘状态（V0.3）：与识别状态同构，多一个 `skipped`（没有任何可用的语音记录时不发请求）
+REVIEW_STATUS_PENDING = "pending"
+REVIEW_STATUS_RUNNING = "running"
+REVIEW_STATUS_SUCCEEDED = "succeeded"
+REVIEW_STATUS_FAILED = "failed"
+REVIEW_STATUS_SKIPPED = "skipped"
+# 与识别侧的 `UNDERSTANDING_SKIPPED` 同名同义，保留这个更短的别名，
+# 使两条链路的调用点写法一致
+REVIEW_SKIPPED = REVIEW_STATUS_SKIPPED
+
+TERMINAL_REVIEW_STATUSES: frozenset[str] = frozenset(
+    {REVIEW_STATUS_SUCCEEDED, REVIEW_STATUS_FAILED}
+)
+
 
 class UploadSession(Base):
     """一次大文件上传的会话：记录分片进度，落盘位置由 id 推导。"""
@@ -141,6 +155,28 @@ class Task(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # 复盘结论（V0.3）：在整场识别结果之上做一次分析，同样一组独立字段。
+    # 与识别分开的原因一致——「识别成功了但复盘失败」「复盘要重跑而识别结果不动」互不干扰。
+    # `review_result_json` 存归一后的结构化结论与归一告警，模型原始返回另存 `review_raw_text`；
+    # 复盘换提示词就要重跑，原始返回是判断「是提示词的问题还是模型的问题」的唯一凭据。
+    review_status: Mapped[str] = mapped_column(
+        String(16), default=REVIEW_STATUS_PENDING, server_default=REVIEW_STATUS_PENDING
+    )
+    review_progress: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # 本次复盘送进模型的语音记录条数与参与汇总的片段数：覆盖面是理解结论的前提
+    review_segment_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    review_clip_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # 本次分析了多少批转写（长直播分批调用）：耗时与用量的解释项
+    review_batch_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    review_result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_usage_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     upload: Mapped[UploadSession | None] = relationship(back_populates="task")
     clips: Mapped[list["MediaClip"]] = relationship(
         back_populates="task",
@@ -161,6 +197,16 @@ class Task(Base):
     def has_coverage_check(self) -> bool:
         """是否已做过覆盖校验：区分「校验通过」与「尚未校验」。"""
         return self.split_checked_at is not None
+
+    @property
+    def has_review(self) -> bool:
+        """是否已产出过复盘结论：区分「复盘出空结论」与「还没复盘」。"""
+        return self.review_finished_at is not None
+
+    @property
+    def review_succeeded(self) -> bool:
+        """这一轮复盘是否成功：与识别侧同构，供接口与执行链路判断有无可用结论。"""
+        return self.review_status == REVIEW_STATUS_SUCCEEDED
 
 
 class MediaClip(Base):

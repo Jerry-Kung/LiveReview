@@ -11,6 +11,7 @@ import { pollIntervalMs } from "./polling";
 import UploadProgress from "./UploadProgress";
 import TaskSummary from "./TaskSummary";
 import type { UnderstandingActions } from "./Understanding";
+import type { ReviewActions } from "./Review";
 import {
   ApiError,
   completeUpload,
@@ -21,6 +22,7 @@ import {
   retryClipUnderstanding,
   retryTask,
   sliceFile,
+  startReview,
   startUnderstanding,
   uploadChunk,
   type Task,
@@ -175,6 +177,34 @@ function useUnderstanding(
   };
 }
 
+/**
+ * 复盘操作：与识别分开成两个 hook，因为两者的前置条件、耗时与轮询行为都不同——
+ * 识别的主循环在 `useUnderstanding` 里，复盘由 `ReviewBlock` 自己按状态轮询。
+ */
+function useReview(
+  task: Task | null,
+  setTask: (task: Task) => void,
+  setError: (message: string | null) => void
+): ReviewActions {
+  const [reviewing, setReviewing] = useState(false);
+  const taskId = task?.id ?? null;
+
+  const onReview = useCallback(async () => {
+    if (taskId === null) return;
+    setReviewing(true);
+    setError(null);
+    try {
+      setTask(await startReview(taskId));
+    } catch (err) {
+      setError(describeError(err).message);
+    } finally {
+      setReviewing(false);
+    }
+  }, [taskId, setTask, setError]);
+
+  return { onReview: () => void onReview(), reviewing };
+}
+
 /** 从历史记录打开的任务：只读取并展示，不在这里发起处理。 */
 function OpenedTask({
   taskId,
@@ -189,6 +219,7 @@ function OpenedTask({
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const understanding = useUnderstanding(task, setTask, setError);
+  const review = useReview(task, setTask, setError);
 
   const reload = useCallback(async () => {
     try {
@@ -266,7 +297,9 @@ function OpenedTask({
           deleting,
         }}
         understanding={understanding}
+        review={review}
         refreshKey={understanding.refreshKey}
+        onTask={setTask}
       />
       {error !== null && <p className="detail-error">{error}</p>}
     </>
@@ -291,6 +324,10 @@ export default function Workbench({
   const fileRef = useRef<HTMLInputElement>(null);
   // 识别操作与结果刷新：切分完成后即可在本页直接启动识别，不必走历史记录
   const understanding = useUnderstanding(task, setTask, (message) =>
+    setState((prev) => ({ ...prev, error: message }))
+  );
+  // 复盘操作：与识别共用同一条错误通道
+  const review = useReview(task, setTask, (message) =>
     setState((prev) => ({ ...prev, error: message }))
   );
 
@@ -646,7 +683,9 @@ export default function Workbench({
             deleting,
           }}
           understanding={understanding}
+          review={review}
           refreshKey={understanding.refreshKey}
+          onTask={setTask}
         />
       )}
 

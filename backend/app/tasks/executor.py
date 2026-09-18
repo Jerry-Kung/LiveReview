@@ -23,12 +23,15 @@ from app.models import Task, UploadSession
 from app.tasks.runner import (
     STATUS_UPLOADED,
     TASK_KIND_INGEST,
+    TASK_KIND_REVIEW,
     TASK_KIND_UNDERSTAND,
     list_tasks,
+    reclaim_interrupted_review,
     reclaim_interrupted_understanding,
     reclaim_stale_processing,
     run_task,
 )
+from app.tasks.review import run_review
 from app.tasks.understanding import run_understanding
 
 logger = logging.getLogger(__name__)
@@ -74,6 +77,8 @@ def run_sync(task_id: str, phase: str) -> None:
     try:
         if phase == TASK_KIND_UNDERSTAND:
             run_understanding(db, task_id)
+        elif phase == TASK_KIND_REVIEW:
+            run_review(db, task_id)
         else:
             run_task(db, task_id)
     finally:
@@ -92,8 +97,8 @@ def run(task_id: str, phase: str) -> None:
 def submit(task_id: str, phase: str = TASK_KIND_INGEST) -> None:
     """把任务提交到线程池；同一任务的同一阶段重复提交只保留一次。
 
-    识别是独立阶段，与切分阶段的在途记录分开跟踪：同一切片的重复点击不会并发出两次
-    模型请求，即使用户连点也只跑一轮。
+    识别与复盘都是独立阶段，与切分阶段的在途记录分开跟踪：同一任务的重复点击不会并发出
+    两次模型请求，即使用户连点也只跑一轮。
 
     提交前先确认执行器已就绪，避免在持锁期间触发懒构造。
     """
@@ -117,9 +122,11 @@ def requeue_pending() -> int:
        不必回来重新上传；分片没收齐的会话保持原状，仍可续传。
     2. **残留的 `processing` 任务**：退回 `uploaded` 并重新入队（认领凭据已失效）。
     3. **被打断的识别**：退回 `pending` 并重新入队（见 `reclaim_interrupted_understanding`）。
+    4. **被打断的复盘**：同上，见 `reclaim_interrupted_review`——复盘重跑只花一次文本调用的
+       钱，且它的输入（识别结果）已经落库，重跑不会连带重跑识别。
 
-    识别恢复只在「曾经启动过识别」的任务上发生，且已成功的片段不会重复请求，因此重启不会
-    凭空产生模型费用。
+    识别与复盘的恢复都只在「曾经启动过」的任务上发生，且已成功的片段不会重复请求，因此
+    重启不会凭空产生模型费用。
     """
     recovered = resume_interrupted_uploads()
 
@@ -127,6 +134,7 @@ def requeue_pending() -> int:
     try:
         reclaimed = reclaim_stale_processing(db)
         resumed_understanding = reclaim_interrupted_understanding(db)
+        resumed_review = reclaim_interrupted_review(db)
         pending = [task.id for task in list_tasks(db, limit=100) if task.status == STATUS_UPLOADED]
     finally:
         db.close()
@@ -148,7 +156,12 @@ def requeue_pending() -> int:
                 "识别已退回待续跑，但模型未配置，本轮会直接失败；补齐 LLM_* 配置后重启即可继续"
             )
 
-    return len(pending) + len(resumed_understanding) + recovered
+    for task_id in resumed_review:
+        submit(task_id, TASK_KIND_REVIEW)
+    if resumed_review:
+        logger.info("启动时续跑 %d 个中断的复盘任务", len(resumed_review))
+
+    return len(pending) + len(resumed_understanding) + len(resumed_review) + recovered
 
 
 def resume_interrupted_uploads() -> int:

@@ -1252,6 +1252,232 @@ h3 {
   color: var(--ink);
 }
 
+/* 复盘报告：结论 → 依据 → 行动三段式，每段用细线分隔，靠留白而不是卡片分组。
+   时间码一律等宽，是坐标；判断与建议用正文字体，是内容。 */
+.report {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.report-lead {
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: var(--fs-note);
+  color: var(--ink);
+}
+
+.report-part {
+  margin-top: 1.35rem;
+}
+
+.report-part--gap {
+  padding: 0.85rem 1rem;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+}
+
+.report-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.report-count {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  color: var(--ink-mute);
+}
+
+.report-one-line {
+  margin: 0;
+  font-size: var(--fs-lead);
+  color: var(--ink);
+}
+
+/* 关键事件时间线：时间码是唯一对齐的列，扫描时先看到时刻再看到内容 */
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 11rem 9rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.timeline-item:last-child {
+  border-bottom: 0;
+}
+
+.timeline-time {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-micro);
+  color: var(--ink-soft);
+}
+
+.timeline-topic {
+  font-size: var(--fs-note);
+  color: var(--accent-dark);
+}
+
+.timeline-summary {
+  font-size: var(--fs-note);
+  color: var(--ink);
+}
+
+.findings,
+.issues,
+.actions-list,
+.gaps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.finding,
+.issue,
+.action-item {
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.finding:last-child,
+.issue:last-child,
+.action-item:last-child {
+  border-bottom: 0;
+}
+
+.finding-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.25rem;
+}
+
+.finding-dimension {
+  font-size: var(--fs-note);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 证据等级：三档取值原样展示，事实用中性、推断与假设用提示色 */
+.finding-level {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  font-size: var(--fs-micro);
+  color: var(--ink-soft);
+}
+
+.finding-level[data-level="事实"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.finding-level[data-level="高置信推断"],
+.finding-level[data-level="待验证假设"] {
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+
+.finding-time {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-micro);
+  color: var(--ink-mute);
+}
+
+.finding-judgement,
+.issue-problem,
+.action-goal {
+  margin: 0 0 0.2rem;
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+.finding-evidence,
+.finding-suggestion,
+.action-how,
+.action-observe {
+  margin: 0.15rem 0 0;
+  font-size: var(--fs-note);
+  color: var(--ink-soft);
+}
+
+.finding-suggestion {
+  color: var(--accent-dark);
+}
+
+.issues {
+  counter-reset: issue;
+}
+
+.issue-problem::before {
+  counter-increment: issue;
+  content: counter(issue) ". ";
+  font-family: var(--mono);
+  color: var(--ink-mute);
+}
+
+.issue-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.35rem 1.5rem;
+  margin: 0.4rem 0 0;
+}
+
+.issue-fields dt {
+  font-size: var(--fs-micro);
+  color: var(--ink-mute);
+}
+
+.issue-fields dd {
+  margin: 0;
+  font-size: var(--fs-note);
+  color: var(--ink);
+}
+
+.actions-list {
+  counter-reset: action;
+}
+
+.action-goal::before {
+  counter-increment: action;
+  content: counter(action) ". ";
+  font-family: var(--mono);
+  color: var(--ink-mute);
+}
+
+.gaps li {
+  padding: 0.2rem 0;
+  font-size: var(--fs-note);
+  color: var(--warn);
+}
+
+.hint-inline {
+  margin-left: 0.35rem;
+  font-size: var(--fs-micro);
+  color: var(--ink-mute);
+}
+
 @media (max-width: 60rem) {
   .segment {
     grid-template-columns: minmax(0, 1fr);

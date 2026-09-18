@@ -1,7 +1,7 @@
 """后台任务包：执行器与状态流转。
 
-包含两条任务体：切分链（`runner.py`）与识别链（`understanding.py`）。两者共用执行器，
-由 `submit(task_id, phase)` 的 phase 参数区分。
+包含三条任务体：切分链（`runner.py`）、识别链（`understanding.py`）与复盘链（`review.py`）。
+它们共用执行器，由 `submit(task_id, phase)` 的 phase 参数区分。
 """
 
 from app.tasks.executor import (
@@ -11,6 +11,15 @@ from app.tasks.executor import (
     run_sync,
     shutdown,
     submit,
+)
+from app.tasks.review import (
+    PROGRESS_REVIEW_DONE,
+    PROGRESS_REVIEW_END,
+    PROGRESS_REVIEW_START,
+    load_review_result,
+    reset_task_review,
+    review_to_markdown,
+    run_review,
 )
 from app.tasks.runner import (
     PROGRESS_CONVERTED,
@@ -25,9 +34,11 @@ from app.tasks.runner import (
     STATUS_UPLOADING,
     TERMINAL_STATUSES,
     TASK_KIND_INGEST,
+    TASK_KIND_REVIEW,
     TASK_KIND_UNDERSTAND,
     claim_task,
     list_tasks,
+    reclaim_interrupted_review,
     reclaim_interrupted_understanding,
     reclaim_stale_processing,
     remove_task_records,
@@ -48,6 +59,9 @@ __all__ = [
     "PROGRESS_CONVERTED",
     "PROGRESS_DONE",
     "PROGRESS_PROBED",
+    "PROGRESS_REVIEW_DONE",
+    "PROGRESS_REVIEW_END",
+    "PROGRESS_REVIEW_START",
     "PROGRESS_SPLIT_END",
     "PROGRESS_SPLIT_START",
     "PROGRESS_UNDERSTANDING_DONE",
@@ -60,19 +74,25 @@ __all__ = [
     "STATUS_UPLOADING",
     "TERMINAL_STATUSES",
     "TASK_KIND_INGEST",
+    "TASK_KIND_REVIEW",
     "TASK_KIND_UNDERSTAND",
     "claim_task",
     "list_clips",
     "list_tasks",
     "list_unfinished_uploads",
+    "load_review_result",
+    "reclaim_interrupted_review",
     "reclaim_interrupted_understanding",
     "reclaim_stale_processing",
     "remove_task_records",
     "requeue_pending",
     "reset_task_for_retry",
+    "reset_task_review",
     "reset_task_understanding",
     "resume_interrupted_uploads",
     "retry_clip_understanding",
+    "review_to_markdown",
+    "run_review",
     "run_sync",
     "run_task",
     "run_understanding",

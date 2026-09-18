@@ -17,7 +17,7 @@
 - 对象存储通过 `STORAGE_BACKEND` 选择实现：`auto`（默认，凭据齐全用 TOS，否则回落本地 Mock 并记录 warning）、`tos`（强制真实，缺凭据直接报错，测试环境使用）、`mock`（强制本地内存实现）。`TOS_OBJECT_PREFIX` 是对象键的公共前缀（默认 `liverreview/`），`TOS_PRESIGNED_TTL_SECONDS` 是预签名下载链接的默认有效期（秒，默认 3600）。本地未配置 TOS 凭据时不影响启动，存储自动回落 Mock。
 - 上传分片、合并临时文件、原始视频副本与切分中间产物落在 `MEDIA_ROOT`（本地默认 `./media`，容器内 `/app/media`），`UPLOAD_CHUNK_SIZE` 是下发给前端的分片大小（字节，默认 8MB）。该目录不是用户配置项之外的业务数据，清理它只影响未完成的上传与未完成切分的中间产物。
 - 媒体探测（V0.1.4 起）通过 `FFPROBE_PATH`（可执行文件名或「解释器 + 脚本」形式的 JSON 列表）、`PROBE_TIMEOUT_SECONDS`（默认 300 秒）、`PROBE_MAX_OUTPUT_BYTES`（默认 8MB）配置。本地不部署 FFmpeg，因此本地启动只能验证探测的编排与失败原因，真实探测必须在测试环境执行。
-- **模型接入（V0.2 起）**通过 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL_NAME` 三项配置，对接 OpenAI 兼容的 `responses` 接口（当前使用火山引擎方舟的音画理解模型）。**三项都是识别的前置条件**：缺失时切分链路照常工作，但识别接口直接返回 503 并列出缺失项名称，不会逐片各失败一次。`LLM_TIMEOUT_SECONDS`（单次视频理解请求超时，默认 900 秒）是本版最容易低估的一项——分钟级的片段识别在网络与模型排队叠加后会逼近这个值，素材更长或并发更高时应上调。`LLM_FPS`（送模型的采样帧率，默认 1）、`LLM_MAX_ATTEMPTS`（单片最大尝试次数，默认 3）、`LLM_CONCURRENCY`（片段识别并发数，默认 1，串行）、`LLM_CLIP_URL_TTL_SECONDS`（片段预签名视频地址有效期，默认 7200 秒，须覆盖排队与单次识别耗时）、`LLM_UNDERSTANDING_PROMPT`（识别题面，留空使用默认的「识别片段中的所有人声语音」）。
+- **模型接入（V0.2 起）**通过 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL_NAME` 三项配置，对接 OpenAI 兼容的 `responses` 接口（当前使用火山引擎方舟的音画理解模型）。**三项都是识别的前置条件**：缺失时切分链路照常工作，但识别接口直接返回 503 并列出缺失项名称，不会逐片各失败一次。`LLM_TIMEOUT_SECONDS`（单次视频理解请求超时，默认 900 秒）是本版最容易低估的一项——分钟级的片段识别在网络与模型排队叠加后会逼近这个值，素材更长或并发更高时应上调。`LLM_FPS`（送模型的采样帧率，默认 1）、`LLM_MAX_ATTEMPTS`（单片最大尝试次数，默认 3）、`LLM_CONCURRENCY`（片段识别并发数，默认 1，串行）、`LLM_CLIP_URL_TTL_SECONDS`（片段预签名视频地址有效期，默认 7200 秒，须覆盖排队与单次识别耗时）、`LLM_UNDERSTANDING_PROMPT`（识别题面，留空使用默认的「识别片段中的所有人声语音并判断语气」）。**复盘（V0.3 起）复用同一组 `LLM_*` 配置**，另有 `REVIEW_TIMEOUT_SECONDS`（单次复盘请求超时，默认 300 秒，纯文本分析量级远小于视频理解）、`REVIEW_MAX_ATTEMPTS`（单次复盘的最大尝试次数，默认 3）、`REVIEW_INPUT_CHARS_PER_CALL`（单次调用送出的转写字符数上限，默认 20000，超出则按记录边界分批后合并）。
 - 预处理与切分（V0.1.5 起）通过 `FFMPEG_PATH`（形式同 `FFPROBE_PATH`）、`SPLIT_MAX_DURATION_SECONDS`（单片最长时长，默认 3600 秒）、`SPLIT_MAX_CLIP_BYTES`（单片最大体积，默认 `1073741824` 即 1GiB）、`SPLIT_MIN_CLIP_SECONDS`（体积超限时递归对半的下限，默认 1 秒）、`SPLIT_TIMEOUT_SECONDS`（单次转封装/切片调用超时，默认 600 秒）、`FFMPEG_MAX_OUTPUT_BYTES`（ffmpeg stderr 收集上限，默认 8MB）配置。**`SPLIT_MAX_DURATION_SECONDS` 与 `SPLIT_MAX_CLIP_BYTES` 是硬约束**：调小它们会让片段更多、切分更慢，调大则可能超过后续识别环节的输入限制。
 
 ## 3. 本地运行
@@ -265,7 +265,60 @@ docker compose -f docker/docker-compose.yml exec backend python -c "import urlli
 - **重启后识别自动续跑**：进程重启会把被打断的识别退回可续跑状态并重新入队（`reclaim_interrupted_understanding`），只补未完成的片段——已成功的片段不重复请求，因此重启不产生额外模型费用。**从未启动过识别的任务不会被自动拉起**（识别要花钱，必须由用户明确点一次）。若某场识别在重启后停在「未开始」，检查容器日志有无「终态检查」的 warning：模型未配置时恢复会跳过而不是反复失败。
 - **任务停在 `running`（识别中）不动**：正常情况重启一次即可恢复（见上一条）。若重启后仍卡住，检查容器日志有无恢复阶段的异常；状态落库不完整（如 `understanding_started_at` 有值但片段行缺失）时应把该任务的识别重置后重新点击启动。
 
-## 7.3 上传中断与关页面后的续跑
+## 7.3 复盘分析（V0.3 起）
+
+整场识别完成后即可在工作区点击**开始复盘分析**。后端把整场语音转写（带时间戳与语气标注）交给文本模型，按裁剪后的《直播复盘分析准则》产出结构化结论。复盘也是后台任务：关掉页面不影响执行。
+
+**前置条件是「有识别成功的语音记录」**：识别还没跑过时接口返回 409 并给出可操作的原因，不会入队一个注定被跳过的任务。识别有失败片段**不阻断**复盘——缺口会写进结论的分析等级与「本场不足以判断」清单。
+
+结论有三处可核对：
+
+- 任务接口的 `review` 字段是状态与覆盖面（状态、进度、投入分析的语音条数、调用批次、模型、起止时间）；
+- 同字段下的 `review.result` 是结构化结论（一句话结论、分析等级与定级依据、关键事件、分析发现、TOP 问题、下一场动作、缺口清单、归一告警）；
+- `GET /api/tasks/{id}/review.md` 是可下载的 Markdown 报告，与页面同源渲染。
+
+三条与验收直接相关的语义：
+
+- **分析等级由程序兜底**：模型看不到识别缺口，因此成功率低于 50% 时强制判「受限」，有失败片段时不得判「完整」。等级与降级理由都写在结论里。
+- **长转写分批但不摘要**：单批上限见 `REVIEW_INPUT_CHARS_PER_CALL`，超出则按记录边界分批调用；合并是结构性的（去重、按时间排序、按准则截断 TOP3），不额外发起摘要调用。
+- **复盘覆盖而不是追加**：换提示词或补完失败片段后重跑，结论以最后一次为准，不留历史版本。
+
+### 复盘自检（测试环境）
+
+```bash
+# 启动整场复盘（后台执行，接口立即返回 202）
+docker compose -f docker/docker-compose.yml exec backend python -c "import urllib.request; print(urllib.request.urlopen(urllib.request.Request('http://localhost:12439/api/tasks/<任务 id>/review', data=b'', method='POST')).status)"
+
+# 看复盘状态与结构化结论
+docker compose -f docker/docker-compose.yml exec backend python - <<'PY'
+import json, urllib.request
+task = json.load(urllib.request.urlopen("http://localhost:12439/api/tasks/<任务 id>"))
+review = task["review"]
+result = review["result"]
+print("状态", review["status"], "等级", result["analysis_level"] if result else None)
+print("依据", result["level_reason"] if result else review["error"])
+for issue in (result or {}).get("top_issues", []):
+    print("问题", issue["problem"], "→", issue["action"])
+PY
+
+# 下载 Markdown 报告
+docker compose -f docker/docker-compose.yml exec backend python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:12439/api/tasks/<任务 id>/review.md').read().decode('utf-8')[:2000])"
+```
+
+**复盘质量必须人工评估**：本版验收要求用真实整场直播检查结论是否忠实于素材、建议是否具体可执行。自动化测试只覆盖编排、解析、合并与失败隔离，不覆盖模型分析得好不好。
+
+### 排查要点（复盘）
+
+- **接口返回 503 且列出缺失项**：与识别共用模型配置，检查方式同 7.2。
+- **接口返回 409「还没有任何识别成功的片段」**：本场识别未跑或全部失败。先按 7.2 补齐识别再复盘。
+- **状态为 `skipped`**：识别成功但没有任何语音记录（全片识别为空）。此时**不会发请求**，也不会给出空结论——先检查识别结果是否合理。
+- **状态为 `failed` 且原因为 `LLMTimeoutError`**：单次复盘请求超时。长直播应调大 `REVIEW_TIMEOUT_SECONDS`，或调小 `REVIEW_INPUT_CHARS_PER_CALL` 让每批更短、批数更多。
+- **状态为 `failed` 且原因为「复盘输出无法解析」**：模型没有返回可用的 JSON 对象。任务行的 `review_raw_text` 保留了**各批的原始返回**，据此判断是提示词问题还是模型侧问题。
+- **结论里有「解析告警」**：多为 `top_issues` / `next_actions` 超出准则条数被截断，属预期行为；若提示某条缺少有效内容被丢弃，说明模型那一批的输出格式异常，可结合 `review_raw_text` 复核。
+- **耗时与用量**：`review.batch_count` 是本次调用批数，任务行的 `review_usage_json` 保留各批 token 用量。耗时约等于批数 × 单批耗时。
+- **重启后复盘自动续跑**：进程重启会把被打断的复盘退回待跑并重新入队（`reclaim_interrupted_review`）。复盘输入（识别结果）已落库，续跑最多重跑一次文本调用，**不会触发识别或重新计费视频理解**。
+
+## 7.4 上传中断与关页面后的续跑
 
 分片传输由浏览器驱动，原文件在用户磁盘上，**服务端拿不到没传上来的部分**；但「分片收齐之后的合并与入库」是后端的事，不依赖页面是否打开：
 

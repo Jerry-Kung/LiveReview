@@ -16,11 +16,11 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **`backend/app/uploads.py`**：上传会话状态取值与「合并 → 上传对象存储 → 任务转待处理」的入库链路。接口层与启动恢复共用同一份实现——上传由浏览器逐片驱动，因此收齐之后的步骤不能写在请求处理里，否则关页面就断了。
 - **`backend/app/tasks/`**：后台任务执行器（进程内线程池）、任务状态流转与启动恢复，详见下节。
 - **`backend/app/media/`**：媒体处理（ffprobe 探测、ffmpeg 转封装与切分、覆盖校验）的调用、解析与本地产物路径约定；只依赖配置与标准库，不感知数据库、HTTP 与对象存储。
-- **`backend/app/llm/`**：音画理解模型的接入。`base.py` 定义契约与领域异常，`client.py` 为基于 OpenAI 兼容 `responses` 接口的实现，`prompts.py` 为提示词，`parsing.py` 为模型输出的解析与时间对齐；业务代码只依赖本包，不接触模型厂商 SDK。
-- **`backend/app/transcript.py`**：识别结果汇总，把逐片记录按原视频时间轴拼成整场全文；只在 `routers/understanding.py` 里被调用。
-- **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针，`uploads.py`、`tasks.py` 与 `understanding.py` 面向前端（统一 `/api` 前缀）。
+- **`backend/app/llm/`**：模型接入。`base.py` 定义契约与领域异常，`client.py` 为基于 OpenAI 兼容接口的实现（视频理解走 `responses`，复盘走 `chat.completions`），`prompts.py` / `review_prompts.py` 为两条链路的提示词，`parsing.py` 为模型输出的解析、时间对齐与复盘结论归一；业务代码只依赖本包，不接触模型厂商 SDK。
+- **`backend/app/transcript.py`**：识别结果汇总。对外给两份产物：人工核对用的整场全文（接口与导出）与复盘节点用的输入文本（带时间戳与语气标注，按记录边界分批）；被 `routers/understanding.py` 与 `tasks/review.py` 调用。
+- **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针，`uploads.py`、`tasks.py`、`understanding.py` 与 `review.py` 面向前端（统一 `/api` 前缀）。
 - **`backend/app/storage/`**：对象存储的契约与实现，详见下节。
-- **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（页眉 + 侧栏 + 工作区），`Header.tsx` 承载服务状态与用户区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。用户登录为预置功能区（登录态仅前端，不请求后端）；历史记录读既有任务列表接口，账号隔离待登录接入。
+- **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（页眉 + 侧栏 + 工作区），`Header.tsx` 承载服务状态与用户区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `Understanding.tsx` / `Review.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。用户登录为预置功能区（登录态仅前端，不请求后端）；历史记录读既有任务列表接口，账号隔离待登录接入。
 
 ## 本地产物
 
@@ -47,10 +47,14 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
   1. **分片已收齐却没入库的上传**：上传由浏览器逐片驱动，关页面会停在「分片在盘上、没人合并」。这类会话交给 `app/uploads.py` 的 `finalize` 接着做完（幂等：对象已存在或本地副本已在时不再重传）；缺片的会话保持原状等待续传，不判失败。
   2. **残留的 `processing` 任务**：退回 `uploaded` 并重新入队（内存态认领凭据已失效）。
   3. **被打断的识别**：`understanding_status` 退回 `pending` 并重新入队。只认「曾经启动过」（`understanding_started_at` 有值）且这一轮没有结论的任务，已成功的片段保留不动，因此重启不会重复计费；从未启动过识别的任务不会被自动拉起。
+  4. **被打断的复盘**：`review_status` 退回 `pending` 并重新入队。判定方式同上（`review_started_at` 有值且这一轮没有结论）。复盘输入是已落库的识别结果，续跑最多重跑一次文本调用。
+复盘链路（V0.3 起）：同样由手工触发（`POST /api/tasks/{id}/review`），前置条件是「有识别成功的语音记录」。任务体先把整场转写渲染成复盘输入（时间戳 + 语气标注，缺口显式声明），超出单批上限则按**记录边界**分批调用文本模型，逐批拿到结构化 JSON 后由 `merge_reviews` 做**结构性合并**（去重、按时间排序、按准则截断 TOP3）——不额外发起摘要调用。分析等级由程序按真实覆盖面兜底校正（成功率低于 50% 强制「受限」，有失败片段时不得为「完整」）。复盘输入是已落库的识别结果，因此重跑不触碰识别，被重启打断时自动续跑最多重跑一次文本调用。
+
 - **状态机**：`uploading` → `uploaded` → `processing` → `succeeded` / `failed`。执行器用带条件的 UPDATE 认领任务（`process_token` 为认领判据），并发下只有一个执行器能认领成功，避免重复执行。
 - **探测阶段**：任务体用 ffprobe 探测原始视频，常用元数据升为任务表的列（时长、分辨率、编码、码率、流数），完整 ffprobe 输出存 `metadata_json`，内容 sha256 存 `content_hash`。时间基准（`duration_seconds`）是切分的依据。
 - **切分阶段**：切分输入可能是转封装产物而非原始视频，其容器与时长单独记录在 `split_source_format` / `split_source_duration_seconds`——覆盖校验必须按切分输入的时长判断，而不是原始文件的时长。切片逐条落在 `media_clips` 表（序号、起止秒、实测时长与体积、对象键、状态），序号即时间轴顺序，重试按序号复用已上传的片段。
 - **识别阶段（V0.2）**：任务体不共用切分链的 `status`（`uploaded` / `processing` / `succeeded` / `failed` 仍然只描述切分链），而是写 `understanding_*` 字段。这样「切分成功但识别失败」与「识别要重跑而切分产物不动」互不干扰；切分进度与识别进度因此也是两组独立取值（切分 0→100，识别 0→100 另算）。
+- **复盘阶段（V0.3）**：与识别同构，写 `review_*` 字段、不共用切分链的 `status`；结构化结论存 `review_result_json`，各批原始返回另存 `review_raw_text`——复盘换提示词就要重跑，原始返回是判断「是提示词的问题还是模型的问题」的唯一凭据。
 - **失败可见**：失败原因写入任务与上传会话的 `error` 字段，接口原样返回；服务端存储错误带上 `request_id`。已入库的失败任务可经重试接口重新入队（重试前清空探测结论与覆盖结论，片段行保留以复用已上传产物），未入库的失败应重新发起上传而非重试任务。
 
 ## 对象存储
@@ -65,7 +69,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 ## 外部依赖
 
 - **火山引擎 TOS**：对象存储服务商，通过官方 SDK 接入，仅测试环境具备真实凭据。识别链路用它生成片段预签名地址，作为模型的视频输入。
-- **音画理解模型**：通过 OpenAI 兼容的 `responses` 接口接入（`app/llm/`），供应商与型号由环境变量决定，不锁定厂商。识别的是片段，因此输入大小与耗时都由切分参数间接决定。
+- **模型服务**：通过 OpenAI 兼容接口接入（`app/llm/`），供应商与型号由环境变量决定，不锁定厂商。视频理解走 `responses`（识别的是片段，输入大小与耗时都由切分参数间接决定），复盘走 `chat.completions`（纯文本，输入是整场转写）。两处共用同一组 `LLM_*` 配置。
 - **SQLite**：V0 阶段的业务存储，通过 SQLAlchemy 接入；数据库产品的长期选型见 `README.md` 第 5 节，随业务量演进重新评估。
 - **FFmpeg / ffprobe**：媒体探测、转封装与切分工具，V0.1.4 起由 `backend/app/media/` 通过命令行调用，只在测试环境（Docker 镜像）安装，本地不部署；工具路径通过 `FFPROBE_PATH` / `FFMPEG_PATH`（可执行文件名，或「解释器 + 脚本」形式的 JSON 列表）配置，超时与输出上限通过 `PROBE_TIMEOUT_SECONDS` / `PROBE_MAX_OUTPUT_BYTES` / `SPLIT_TIMEOUT_SECONDS` / `FFMPEG_MAX_OUTPUT_BYTES` 配置。转封装与切分全程 `-c copy` 不重编码，并始终保留音视频流（`-map 0:v -map 0:a?`）。
 

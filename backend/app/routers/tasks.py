@@ -18,11 +18,17 @@ from app.models import (
 )
 from app.schemas import (
     CoverageIssueResponse,
+    ReviewActionResponse,
+    ReviewEventResponse,
+    ReviewFindingResponse,
+    ReviewIssueResponse,
+    ReviewResultResponse,
     TaskClipResponse,
     TaskCoverageResponse,
     TaskListResponse,
     TaskMetadataResponse,
     TaskResponse,
+    TaskReviewResponse,
     TaskUnderstandingResponse,
 )
 from app.storage import StorageError, describe_error, get_storage
@@ -31,6 +37,7 @@ from app.tasks import (
     STATUS_PROCESSING,
     STATUS_UPLOADING,
     list_tasks,
+    load_review_result,
     reset_task_for_retry,
     submit,
 )
@@ -57,6 +64,7 @@ def _to_response(task: Task, settings: Settings) -> TaskResponse:
         metadata=_to_metadata(task),
         coverage=_to_coverage(task),
         understanding=_to_understanding(task, settings),
+        review=_to_review(task, settings),
         clips=_to_clips(task, settings),
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -122,6 +130,94 @@ def _to_understanding(task: Task, settings: Settings) -> TaskUnderstandingRespon
         finished_at=task.understanding_finished_at,
         # 只回显模型名；base_url 与 api_key 属配置，不进接口响应
         model_name=settings.llm_model_name,
+    )
+
+
+def _to_review(task: Task, settings: Settings) -> TaskReviewResponse | None:
+    """复盘结论：`finished_at` 为空表示这一轮还没跑过，不把「未开始」渲染成「已复盘」。
+
+    结论体只在真正成功过且能解析时给出；解析失败时保留状态与错误，让用户看到「这一轮的结果
+    读不出来」而不是一片空白。
+    """
+    payload = load_review_result(task) if task.review_succeeded else None
+    warnings = [str(item) for item in (payload or {}).get("warnings", [])]
+
+    return TaskReviewResponse(
+        status=task.review_status,
+        progress=task.review_progress,
+        clip_count=task.review_clip_count,
+        segment_count=task.review_segment_count,
+        batch_count=task.review_batch_count,
+        error=task.review_error,
+        started_at=task.review_started_at,
+        finished_at=task.review_finished_at,
+        model_name=settings.llm_model_name if task.review_finished_at else None,
+        warnings=warnings,
+        result=_to_review_result(payload) if payload else None,
+    )
+
+
+def _to_review_result(payload: dict) -> ReviewResultResponse:
+    """把落库的复盘结论转成响应模型：缺失字段一律补默认值，前端不必到处判空。"""
+
+    def text(value) -> str:
+        return value if isinstance(value, str) else ""
+
+    def seconds(value) -> float | None:
+        return float(value) if isinstance(value, (int, float)) else None
+
+    events = [item for item in payload.get("key_events") or [] if isinstance(item, dict)]
+    findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+    issues = [item for item in payload.get("top_issues") or [] if isinstance(item, dict)]
+    actions = [item for item in payload.get("next_actions") or [] if isinstance(item, dict)]
+
+    return ReviewResultResponse(
+        one_line=text(payload.get("one_line")),
+        analysis_level=text(payload.get("analysis_level")),
+        level_reason=text(payload.get("level_reason")),
+        batch_count=int(payload.get("batch_count") or 1),
+        clip_count=int(payload.get("clip_count") or 0),
+        succeeded_clip_count=int(payload.get("succeeded_clip_count") or 0),
+        failed_clip_count=int(payload.get("failed_clip_count") or 0),
+        key_events=[
+            ReviewEventResponse(
+                start_seconds=seconds(item.get("start_seconds")),
+                end_seconds=seconds(item.get("end_seconds")),
+                topic=text(item.get("topic")),
+                summary=text(item.get("summary")),
+            )
+            for item in events
+        ],
+        findings=[
+            ReviewFindingResponse(
+                dimension=text(item.get("dimension")),
+                judgement=text(item.get("judgement")),
+                evidence_level=text(item.get("evidence_level")),
+                evidence=text(item.get("evidence")),
+                start_seconds=seconds(item.get("start_seconds")),
+                suggestion=text(item.get("suggestion")),
+            )
+            for item in findings
+        ],
+        top_issues=[
+            ReviewIssueResponse(
+                problem=text(item.get("problem")),
+                evidence=text(item.get("evidence")),
+                impact=text(item.get("impact")),
+                root_cause=text(item.get("root_cause")),
+                action=text(item.get("action")),
+            )
+            for item in issues
+        ],
+        next_actions=[
+            ReviewActionResponse(
+                goal=text(item.get("goal")),
+                how=text(item.get("how")),
+                observe=text(item.get("observe")),
+            )
+            for item in actions
+        ],
+        missing_info=[str(item) for item in payload.get("missing_info") or []],
     )
 
 

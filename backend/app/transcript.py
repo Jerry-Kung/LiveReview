@@ -195,10 +195,134 @@ def render_text(task: Task, blocks: list[ClipBlock], *, model_name: str | None =
             start = format_timestamp(float(segment.get("start_seconds") or 0.0))
             end = format_timestamp(float(segment.get("end_seconds") or 0.0))
             content = str(segment.get("content") or "").strip()
+            tone = str(segment.get("tone") or "").strip()
             marker = "  ⚠ 时间越界" if segment.get("out_of_range") else ""
-            lines.append(f"[{start} - {end}] {content}{marker}")
+            tone_note = f"（语气：{tone}）" if tone else ""
+            lines.append(f"[{start} - {end}] {content}{tone_note}{marker}")
         for warning in block.warnings:
             lines.append(f"（解析告警：{warning}）")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+# —— 复盘输入（V0.3）——
+
+# 每条语音记录在复盘输入里的行首标记：时间 + 语气。语气缺失时只留时间
+_REVIEW_LINE = "[{start}] {content}{tone}"
+
+
+def render_review_text(summary: TranscriptSummary) -> str:
+    """把整场记录渲染为**复盘节点**的输入文本。
+
+    与 `render_text` 分开而不是复用：那份全文是给人看的（分片段落、告警括注、越界标记，
+    便于逐条核对），这里给模型看，取向不同：
+
+    - **紧凑**：一行一条记录，不带片段分隔与解析告警——这些对分析是噪声，token 却要照付。
+    - **保留语气**：V0.3 起识别会给出每句的语气估计，它是准则里「语气与情绪」「互动留人」
+      两个维度唯一的输入。
+    - **覆盖缺口仍要说明**：失败与未识别的片段用一行括注明确写出，否则模型会把「缺失」
+      当成「这段时间没人说话」，进而给出「内容空洞」这类错误结论。
+    """
+    clips = sorted(summary.clips, key=lambda block: block.index)
+    lines: list[str] = []
+    succeeded = sum(1 for block in clips if block.status == UNDERSTANDING_STATUS_SUCCEEDED)
+    failed = sum(1 for block in clips if block.status == UNDERSTANDING_STATUS_FAILED)
+    pending = len(clips) - succeeded - failed
+
+    lines.append(
+        f"全场共 {len(clips)} 片，识别成功 {succeeded} 片，失败 {failed} 片，未识别 {pending} 片。"
+    )
+    if failed:
+        spans = "、".join(
+            f"片段 {block.index}（{format_timestamp(block.start_seconds)} - "
+            f"{format_timestamp(block.end_seconds)}）"
+            for block in clips
+            if block.status == UNDERSTANDING_STATUS_FAILED
+        )
+        lines.append(f"以下时段语音识别失败，内容缺失，不要据此外推或补全：{spans}。")
+    lines.append("")
+
+    for block in clips:
+        if block.status != UNDERSTANDING_STATUS_SUCCEEDED:
+            continue
+        for segment in block.segments:
+            start = format_timestamp(float(segment.get("start_seconds") or 0.0))
+            content = str(segment.get("content") or "").strip()
+            if not content:
+                continue
+            tone = str(segment.get("tone") or "").strip()
+            suffix = f"（语气：{tone}）" if tone else ""
+            lines.append(_REVIEW_LINE.format(start=start, content=content, tone=suffix))
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def segment_records(clips: list[ClipBlock]) -> list[dict[str, Any]]:
+    """按时间顺序展开已识别片段里的语音记录（复盘输入分批用）。
+
+    返回的列表里只有**真正有内容的记录**：片段分隔行只在该片确有语音记录时才带上。
+    否则一场「所有片段都识别成空」的直播会带着一堆只有分隔行的输入进入复盘——那等于
+    拿空输入问模型，而正确的结果是「没有可分析的内容」。
+    """
+    records: list[dict[str, Any]] = []
+    for block in sorted(clips, key=lambda item: item.index):
+        if block.status != UNDERSTANDING_STATUS_SUCCEEDED:
+            continue
+        lines: list[str] = []
+        for segment in block.segments:
+            content = str(segment.get("content") or "").strip()
+            if not content:
+                continue
+            tone = str(segment.get("tone") or "").strip()
+            suffix = f"（语气：{tone}）" if tone else ""
+            lines.append(
+                _REVIEW_LINE.format(
+                    start=format_timestamp(float(segment.get("start_seconds") or 0.0)),
+                    content=content,
+                    tone=suffix,
+                )
+            )
+        if lines:
+            records.append(
+                {"kind": "clip", "clip_index": block.index, "text": _clip_header(block)}
+            )
+            records.extend(
+                {"kind": "segment", "clip_index": block.index, "text": line} for line in lines
+            )
+    return records
+
+
+def _clip_header(block: ClipBlock) -> str:
+    """片段在复盘输入里的分隔行：标记「这是第几片、覆盖哪段」，便于结论引用时间。"""
+    return (
+        f"── 片段 {block.index}"
+        f"（{format_timestamp(block.start_seconds)} - {format_timestamp(block.end_seconds)}）"
+    )
+
+
+def batch_review_input(records: list[dict[str, Any]], *, max_chars: int) -> list[str]:
+    """把展开后的记录按字符上限切分成若干批，返回每批的文本。
+
+    逐行累加，加不下就开新批：行本身是**不可再分的最小单位**（一条语音记录或一个片段头），
+    一条超长句只会独占一批，不会被劈成两半分别送给模型。上限只作分批阈值，不做硬截断。
+    """
+    if max_chars <= 0:
+        return ["\n".join(record["text"] for record in records)] if records else []
+
+    batches: list[str] = []
+    current: list[str] = []
+    size = 0
+
+    for record in records:
+        text = record["text"]
+        if current and size + len(text) > max_chars:
+            batches.append("\n".join(current))
+            current = []
+            size = 0
+        current.append(text)
+        size += len(text) + 1
+
+    if current:
+        batches.append("\n".join(current))
+    return batches

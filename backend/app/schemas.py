@@ -124,7 +124,8 @@ class TranscriptSegmentResponse(BaseModel):
 
     `clip_start_seconds` / `clip_end_seconds` 是片段内的相对时间，保留下来用于对照原始
     模型输出定位偏差。`out_of_range` 为真表示模型给出的时间超出片段本身，本系统只标记、
-    不裁切——这类记录需要在人工核查时单独看。
+    不裁切——这类记录需要在人工核查时单独看。`tone` 是模型对语气与情绪的主观估计（V0.3
+    起），可能为空。
     """
 
     index: int
@@ -133,6 +134,7 @@ class TranscriptSegmentResponse(BaseModel):
     end_seconds: float
     duration_seconds: float
     content: str
+    tone: str = ""
     clip_start_seconds: float
     clip_end_seconds: float
     out_of_range: bool = False
@@ -177,6 +179,86 @@ class CoverageIssueResponse(BaseModel):
     message: str
 
 
+class ReviewEventResponse(BaseModel):
+    """一条关键事件：时间为原视频绝对秒数，与转写时间戳同一坐标系。"""
+
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    topic: str = ""
+    summary: str = ""
+
+
+class ReviewFindingResponse(BaseModel):
+    """一条分析发现：判断 + 证据等级 + 依据 + 建议。
+
+    `evidence_level` 取值为【事实】/【高置信推断】/【待验证假设】三档，取值口径见复盘准则；
+    界面据此提示用户这条结论能信到什么程度。
+    """
+
+    dimension: str = ""
+    judgement: str = ""
+    evidence_level: str = ""
+    evidence: str = ""
+    start_seconds: float | None = None
+    suggestion: str = ""
+
+
+class ReviewIssueResponse(BaseModel):
+    """一条 TOP 问题：问题、证据、影响、归因与下一场动作。"""
+
+    problem: str = ""
+    evidence: str = ""
+    impact: str = ""
+    root_cause: str = ""
+    action: str = ""
+
+
+class ReviewActionResponse(BaseModel):
+    """一条下一场实验动作：目标、做法与观察项。"""
+
+    goal: str = ""
+    how: str = ""
+    observe: str = ""
+
+
+class ReviewResultResponse(BaseModel):
+    """复盘结论本体：与 `app/llm/parsing.py` 的归一结构一一对应。"""
+
+    one_line: str = ""
+    analysis_level: str = ""
+    level_reason: str = ""
+    batch_count: int = 1
+    clip_count: int = 0
+    succeeded_clip_count: int = 0
+    failed_clip_count: int = 0
+    key_events: list[ReviewEventResponse] = Field(default_factory=list)
+    findings: list[ReviewFindingResponse] = Field(default_factory=list)
+    top_issues: list[ReviewIssueResponse] = Field(default_factory=list)
+    next_actions: list[ReviewActionResponse] = Field(default_factory=list)
+    missing_info: list[str] = Field(default_factory=list)
+
+
+class TaskReviewResponse(BaseModel):
+    """复盘结论（V0.3）：状态、覆盖面与结构化结论。
+
+    `result` 只在真正跑出结论时非空；`finished_at` 为空表示这一轮还没跑过，避免把「未开始」
+    渲染成「已复盘」。`error` 是失败原因，`warnings` 是归一过程中的告警（如超出的 TOP 条目
+    被截断）。
+    """
+
+    status: str
+    progress: int = 0
+    clip_count: int = 0
+    segment_count: int = 0
+    batch_count: int = 0
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    model_name: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    result: ReviewResultResponse | None = None
+
+
 class TaskCoverageResponse(BaseModel):
     """切分与覆盖校验结论：`checked_at` 非空表示已校验过。
 
@@ -202,6 +284,7 @@ class TaskResponse(BaseModel):
     metadata: TaskMetadataResponse | None = None
     coverage: TaskCoverageResponse | None = None
     understanding: TaskUnderstandingResponse | None = None
+    review: TaskReviewResponse | None = None
     clips: list[TaskClipResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

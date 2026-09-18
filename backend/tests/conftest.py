@@ -15,7 +15,7 @@ from app.database import get_db
 from app.llm import use_client
 from app.models import Base
 from app.storage import InMemoryStorage, StorageConfig
-from tests.fake_llm import FakeUnderstandingClient
+from tests.fake_llm import FakeReviewClient, FakeUnderstandingClient
 
 CHUNK_SIZE = 1024 * 1024
 FILE_SIZE = 3 * CHUNK_SIZE  # 3 片，便于构造缺片与乱序场景
@@ -146,10 +146,13 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
     # 识别链路的配置与存储同样走单例；存储已替换为 Mock，配置指向测试配置
     monkeypatch.setattr("app.tasks.understanding.get_settings", lambda: test_settings)
     monkeypatch.setattr("app.tasks.understanding.get_storage", lambda: storage)
+    # 复盘链路的配置同样走单例（它不碰对象存储，输入只有已落库的识别结果）
+    monkeypatch.setattr("app.tasks.review.get_settings", lambda: test_settings)
     # 识别客户端默认替换为假实现，绝不发真实网络请求；单测内可再替换成自己的实例
     monkeypatch.setattr(
         "app.tasks.understanding.get_understanding_client", lambda: FakeUnderstandingClient()
     )
+    monkeypatch.setattr("app.tasks.review.get_review_client", lambda: FakeReviewClient())
 
     with TestClient(app) as test_client:
         yield test_client

@@ -9,6 +9,12 @@ import logging
 import threading
 
 from app.llm.base import (
+    REVIEW_SKIPPED,
+    REVIEW_STATUS_FAILED,
+    REVIEW_STATUS_PENDING,
+    REVIEW_STATUS_RUNNING,
+    REVIEW_STATUS_SUCCEEDED,
+    TERMINAL_REVIEW_STATUSES,
     TERMINAL_UNDERSTANDING_STATUSES,
     UNDERSTANDING_SKIPPED,
     UNDERSTANDING_STATUS_FAILED,
@@ -21,18 +27,31 @@ from app.llm.base import (
     LLMResponseError,
     LLMServerError,
     LLMTimeoutError,
+    ReviewClient,
+    ReviewResult,
     SpeechSegment,
     UnderstandingClient,
     UnderstandingResult,
     describe_error,
 )
-from app.llm.client import OpenAIUnderstandingClient
-from app.llm.parsing import AlignedSegment, align_segments, parse_segments
+from app.llm.client import OpenAIReviewClient, OpenAIUnderstandingClient
+from app.llm.parsing import (
+    AlignedSegment,
+    align_segments,
+    parse_review_response,
+    parse_segments,
+)
 from app.llm.prompts import DEFAULT_UNDERSTANDING_PROMPT, build_prompt
+from app.llm.review_prompts import (
+    REVIEW_SYSTEM_PROMPT,
+    build_review_system_prompt,
+    build_review_user_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
 _client: UnderstandingClient | None = None
+_review_client: ReviewClient | None = None
 _lock = threading.Lock()
 
 
@@ -46,6 +65,14 @@ def build_client(settings) -> UnderstandingClient:
     if missing:
         raise LLMClientError(f"缺少模型配置：{'、'.join(missing)}")
     return OpenAIUnderstandingClient(settings.llm_config())
+
+
+def build_review_client(settings) -> ReviewClient:
+    """按配置构造复盘客户端；与识别客户端共用同一份模型配置。"""
+    missing = settings.llm_missing_fields
+    if missing:
+        raise LLMClientError(f"缺少模型配置：{'、'.join(missing)}")
+    return OpenAIReviewClient(settings.llm_config())
 
 
 def get_understanding_client() -> UnderstandingClient:
@@ -64,6 +91,18 @@ def get_understanding_client() -> UnderstandingClient:
     return _client
 
 
+def get_review_client() -> ReviewClient:
+    """返回进程内复用的复盘客户端；替换方式与识别客户端一致。"""
+    global _review_client
+    if _review_client is None:
+        with _lock:
+            if _review_client is None:
+                from app.config import get_settings
+
+                _review_client = build_review_client(get_settings())
+    return _review_client
+
+
 def use_client(client: UnderstandingClient | None) -> None:
     """注册识别客户端实现；传 None 表示恢复为「按配置构造」。"""
     global _client
@@ -71,13 +110,28 @@ def use_client(client: UnderstandingClient | None) -> None:
         _client = client
 
 
+def use_review_client(client: ReviewClient | None) -> None:
+    """注册复盘客户端实现；传 None 表示恢复为「按配置构造」。"""
+    global _review_client
+    with _lock:
+        _review_client = client
+
+
 def reset_client() -> None:
     """丢弃缓存的客户端，供测试与配置变更后重建使用。"""
     use_client(None)
+    use_review_client(None)
 
 
 __all__ = [
     "DEFAULT_UNDERSTANDING_PROMPT",
+    "REVIEW_SKIPPED",
+    "REVIEW_STATUS_FAILED",
+    "REVIEW_STATUS_PENDING",
+    "REVIEW_STATUS_RUNNING",
+    "REVIEW_STATUS_SUCCEEDED",
+    "REVIEW_SYSTEM_PROMPT",
+    "TERMINAL_REVIEW_STATUSES",
     "TERMINAL_UNDERSTANDING_STATUSES",
     "UNDERSTANDING_SKIPPED",
     "UNDERSTANDING_STATUS_FAILED",
@@ -91,16 +145,25 @@ __all__ = [
     "LLMResponseError",
     "LLMServerError",
     "LLMTimeoutError",
+    "OpenAIReviewClient",
     "OpenAIUnderstandingClient",
+    "ReviewClient",
+    "ReviewResult",
     "SpeechSegment",
     "UnderstandingClient",
     "UnderstandingResult",
     "align_segments",
     "build_client",
     "build_prompt",
+    "build_review_client",
+    "build_review_system_prompt",
+    "build_review_user_prompt",
     "describe_error",
+    "get_review_client",
     "get_understanding_client",
+    "parse_review_response",
     "parse_segments",
     "reset_client",
     "use_client",
+    "use_review_client",
 ]

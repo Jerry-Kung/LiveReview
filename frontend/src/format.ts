@@ -39,6 +39,32 @@ export function understandingStatusLabel(status: string | null): string {
   return UNDERSTANDING_STATUS_LABELS[status] ?? status;
 }
 
+/** 复盘状态：与识别状态分开，因为「识别成功但复盘失败」是常见情况。 */
+export const REVIEW_STATUS_LABELS: Record<string, string> = {
+  pending: "未复盘",
+  running: "复盘中",
+  succeeded: "已复盘",
+  failed: "复盘失败",
+  // 没有任何可用的语音记录：不发请求，也不假装跑过
+  skipped: "无输入",
+};
+
+export function reviewStatusLabel(status: string | null): string {
+  if (status === null) return "未开始";
+  return REVIEW_STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * 复盘分析等级的语气：完整是健康态，「部分」与「受限」都需要用户留意结论边界。
+ *
+ * 等级由程序按覆盖面和模型判断共同确定，取值来自 `app/tasks/review.py` 的兜底逻辑。
+ */
+export function reviewLevelTone(level: string): "ok" | "attention" | undefined {
+  if (level === "完整") return "ok";
+  if (level === "部分" || level === "受限") return "attention";
+  return undefined;
+}
+
 export function taskStatusLabel(status: string): string {
   return TASK_LABELS[status] ?? status;
 }

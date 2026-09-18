@@ -8,6 +8,7 @@
 import type { Task, TaskMetadata } from "./api";
 import ClipTable from "./ClipTable";
 import UnderstandingBlock, { type UnderstandingActions } from "./Understanding";
+import ReviewBlock, { type ReviewActions } from "./Review";
 import {
   PLACEHOLDER,
   describeTask,
@@ -103,17 +104,23 @@ export default function TaskSummary({
   task,
   actions,
   understanding,
+  review,
   refreshKey = 0,
   notice = null,
+  onTask,
 }: {
   task: Task;
   actions: TaskActions;
   /** 识别相关操作：切分未完成的任务也能看到识别块，只是按钮不可用。 */
   understanding: UnderstandingActions;
+  /** 复盘相关操作：识别未完成时按钮不可用，块本身仍然显示。 */
+  review: ReviewActions;
   /** 识别状态变化时递增，用于让全文面板重新拉取。 */
   refreshKey?: number;
   /** 操作层面的失败（如删除未成功）：与任务自身的失败原因分开呈现。 */
   notice?: string | null;
+  /** 复盘轮询拿到新状态时回写：复盘结论由任务详情承载。 */
+  onTask: (task: Task) => void;
 }) {
   const coverage = task.coverage;
   const clips = task.clips ?? [];
@@ -178,6 +185,9 @@ export default function TaskSummary({
 
       {/* 识别块在切分未完成时也出现：让用户看到「下一步要做什么」以及为什么还不能做 */}
       <UnderstandingBlock task={task} actions={understanding} refreshKey={refreshKey} />
+
+      {/* 复盘块同理：识别没做完时按钮不可用，但用户能看到链路的下一步是什么 */}
+      <ReviewBlock task={task} actions={review} onTask={onTask} />
 
       {task.error && <p className="detail-error">失败原因：{task.error}</p>}
       {notice && <p className="detail-error">{notice}</p>}

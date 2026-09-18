@@ -58,6 +58,8 @@ from app.models import (
     CLIP_STATUS_FAILED,
     CLIP_STATUS_PENDING,
     CLIP_STATUS_UPLOADED,
+    REVIEW_STATUS_PENDING,
+    REVIEW_STATUS_RUNNING,
     UNDERSTANDING_STATUS_PENDING,
     UNDERSTANDING_STATUS_RUNNING,
     MediaClip,
@@ -73,6 +75,8 @@ TASK_KIND_INGEST = "ingest"
 # 识别阶段的任务体标识：与任务行的 `kind` 无关（`kind` 仍描述任务来源），
 # 只用于线程池的「同一任务不同阶段」在途去重
 TASK_KIND_UNDERSTAND = "understand"
+# 复盘阶段（V0.3）：同样只用于在途去重
+TASK_KIND_REVIEW = "review"
 
 STATUS_UPLOADING = "uploading"
 STATUS_UPLOADED = "uploaded"
@@ -709,6 +713,40 @@ def reclaim_interrupted_understanding(db: Session) -> list[str]:
                 # 进度退回起点：续跑会从已成功的片段之后接着推进
                 understanding_progress=0,
                 understanding_finished_at=None,
+                updated_at=utcnow(),
+            )
+        )
+    db.commit()
+    return interrupted
+
+
+def reclaim_interrupted_review(db: Session) -> list[str]:
+    """把被进程重启打断的复盘退回可续跑状态，返回需要重新入队的任务 id。
+
+    与识别恢复同构，但代价小得多：复盘的输入是已落库的识别结果，重跑不会触碰识别，也不会
+    重新请求视频理解——最多重跑一次文本调用，因此重启后直接续跑是划算的。
+    同样只翻「曾启动过复盘」的任务（`review_started_at` 有值），且要求 `review_finished_at`
+    为空，避免把已经跑完的任务重启一遍又花一次钱。
+    """
+    interrupted = [
+        task_id
+        for task_id in db.execute(
+            select(Task.id).where(
+                Task.review_status == REVIEW_STATUS_RUNNING,
+                Task.review_finished_at.is_(None),
+            )
+        ).scalars()
+    ]
+
+    if interrupted:
+        db.execute(
+            update(Task)
+            .where(Task.id.in_(interrupted))
+            .values(
+                review_status=REVIEW_STATUS_PENDING,
+                review_error=None,
+                review_progress=0,
+                review_finished_at=None,
                 updated_at=utcnow(),
             )
         )

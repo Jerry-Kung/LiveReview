@@ -264,6 +264,7 @@ def _store_result(db: Session, clip: MediaClip, result: Any, attempts: int) -> N
             "start_seconds": round(item.start_seconds, 3),
             "end_seconds": round(item.end_seconds, 3),
             "content": item.content,
+            "tone": item.tone,
             "clip_start_seconds": round(item.clip_start_seconds, 3),
             "clip_end_seconds": round(item.clip_end_seconds, 3),
             "out_of_range": item.out_of_range,

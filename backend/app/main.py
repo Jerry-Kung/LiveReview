@@ -8,6 +8,7 @@ from app import tasks
 from app.config import get_settings
 from app.database import init_db
 from app.routers import health, tasks as tasks_router
+from app.routers import review
 from app.routers import understanding
 from app.routers import uploads
 
@@ -28,6 +29,7 @@ app = FastAPI(title="LiveReview", version=get_settings().app_version, lifespan=l
 app.include_router(health.router)
 app.include_router(uploads.router)
 app.include_router(tasks_router.router)
-# 识别路由挂在同一 /api/tasks 前缀下；具体路径（transcript.txt）在模块内先注册，
-# 避免被更宽泛的同级路由抢先匹配
+# 识别与复盘路由挂在同一 /api/tasks 前缀下；具体路径（transcript.txt、review.md）在模块内
+# 先注册，避免被更宽泛的同级路由抢先匹配
 app.include_router(understanding.router)
+app.include_router(review.router)

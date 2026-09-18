@@ -199,6 +199,7 @@ def get_transcript(
                 duration_seconds=float(segment.get("end_seconds") or 0.0)
                 - float(segment.get("start_seconds") or 0.0),
                 content=str(segment.get("content") or ""),
+                tone=str(segment.get("tone") or ""),
                 clip_start_seconds=float(segment.get("clip_start_seconds") or 0.0),
                 clip_end_seconds=float(segment.get("clip_end_seconds") or 0.0),
                 out_of_range=bool(segment.get("out_of_range")),

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -77,8 +77,17 @@ class Settings(BaseSettings):
     llm_concurrency: int = 1
     # 预签名视频 URL 的有效期（秒）：须覆盖「排队等待 + 单次识别」的耗时
     llm_clip_url_ttl_seconds: int = 7200
-    # 识别任务的提示词：留空使用默认题面（识别片段中的所有人声语音）
+    # 识别任务的提示词：留空使用默认题面（识别片段中的所有人声语音并判断语气）
     llm_understanding_prompt: str | None = None
+
+    # 复盘接入（V0.3）：与识别共用 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL_NAME
+    # 单次复盘请求的超时（秒）：纯文本分析，量级远小于视频理解
+    review_timeout_seconds: int = 300
+    # 单次复盘的最大尝试次数（含首次）：瞬时故障退避重试
+    review_max_attempts: int = 3
+    # 单次调用送出的转写正文字符数上限：超出则按片段边界分批，多次调用后合并
+    # 中文按「1 汉字 ≈ 1 token」估算，20000 字约 2 万 token，留足输出与系统提示的余量
+    review_input_chars_per_call: int = 20000
 
     @property
     def storage_missing_fields(self) -> list[str]:
@@ -131,6 +140,8 @@ class Settings(BaseSettings):
             timeout_seconds=self.llm_timeout_seconds,
             fps=self.llm_fps,
             max_attempts=self.llm_max_attempts,
+            review_timeout_seconds=self.review_timeout_seconds,
+            review_max_attempts=self.review_max_attempts,
         )
 
 

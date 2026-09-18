@@ -87,6 +87,72 @@ export type TaskUnderstanding = {
   model_name: string | null;
 };
 
+/** 一条关键事件：时间为原视频绝对秒数，与转写时间戳同一坐标系。 */
+export type ReviewEvent = {
+  start_seconds: number | null;
+  end_seconds: number | null;
+  topic: string;
+  summary: string;
+};
+
+/** 一条分析发现：判断 + 证据等级 + 依据 + 建议。 */
+export type ReviewFinding = {
+  dimension: string;
+  judgement: string;
+  /** 事实 / 高置信推断 / 待验证假设 */
+  evidence_level: string;
+  evidence: string;
+  start_seconds: number | null;
+  suggestion: string;
+};
+
+export type ReviewIssue = {
+  problem: string;
+  evidence: string;
+  impact: string;
+  root_cause: string;
+  action: string;
+};
+
+export type ReviewAction = {
+  goal: string;
+  how: string;
+  observe: string;
+};
+
+/** 复盘结论本体：与后端归一后的结构一一对应。 */
+export type ReviewResult = {
+  one_line: string;
+  /** 完整 / 部分 / 受限：由覆盖面与模型判断共同确定 */
+  analysis_level: string;
+  level_reason: string;
+  batch_count: number;
+  clip_count: number;
+  succeeded_clip_count: number;
+  failed_clip_count: number;
+  key_events: ReviewEvent[];
+  findings: ReviewFinding[];
+  top_issues: ReviewIssue[];
+  next_actions: ReviewAction[];
+  missing_info: string[];
+};
+
+/** 整场复盘结论：未复盘时 finished_at 为空，result 也可能为空。 */
+export type TaskReview = {
+  status: string;
+  progress: number;
+  clip_count: number;
+  segment_count: number;
+  batch_count: number;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  model_name: string | null;
+  /** 归一过程中的告警：如超出准则条数被截断 */
+  warnings: string[];
+  result: ReviewResult | null;
+};
+
 export type TranscriptSegment = {
   index: number;
   clip_index: number;
@@ -94,6 +160,8 @@ export type TranscriptSegment = {
   end_seconds: number;
   duration_seconds: number;
   content: string;
+  /** 语气与情绪的主观估计（V0.3 起）：可能为空，缺失时界面不显示 */
+  tone: string;
   clip_start_seconds: number;
   clip_end_seconds: number;
   /** 时间越出片段范围：只标记不裁切，人工核查时要单独看 */
@@ -140,6 +208,8 @@ export type Task = {
   coverage: TaskCoverage | null;
   /** 整场识别结论：未开始识别时为 null */
   understanding: TaskUnderstanding | null;
+  /** 整场复盘结论：未开始复盘时为 null */
+  review: TaskReview | null;
   /** 切片列表：按序号升序，即原视频时间轴上的顺序 */
   clips: TaskClip[];
   created_at: string;
@@ -269,6 +339,20 @@ export function fetchTranscript(taskId: string): Promise<Transcript> {
 /** 全文下载地址：交给浏览器直接取，不经过前端内存。 */
 export function transcriptDownloadUrl(taskId: string): string {
   return `/api/tasks/${taskId}/transcript.txt`;
+}
+
+/**
+ * 启动整场复盘：后台执行，接口只确认入队。
+ *
+ * 前置条件是「已有识别成功的语音记录」；识别有失败片段不阻断，缺口会写进结论的分析等级。
+ */
+export function startReview(taskId: string): Promise<Task> {
+  return request<Task>(`/api/tasks/${taskId}/review`, { method: "POST" });
+}
+
+/** 复盘报告下载地址：Markdown，与页面同源。 */
+export function reviewDownloadUrl(taskId: string): string {
+  return `/api/tasks/${taskId}/review.md`;
 }
 
 /** 按后端下发的分片大小切分文件；末片自动不足一整片。 */

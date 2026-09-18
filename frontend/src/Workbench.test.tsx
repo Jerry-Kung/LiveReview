@@ -1037,3 +1037,230 @@ describe("识别结果（V0.2）", () => {
     expect(screen.getByText(/尚无切片/)).toBeInTheDocument();
   });
 });
+
+describe("复盘结论（V0.3）", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    window.location.hash = "";
+    setPollIntervalMs(10);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    resetPollIntervalMs();
+    vi.restoreAllMocks();
+  });
+
+  const REVIEW_RESULT = {
+    one_line: "本场讲清了越野场景，但报价前的价值翻译不足。",
+    analysis_level: "部分",
+    level_reason: "1/2 片识别失败，相关时段内容缺失",
+    batch_count: 1,
+    clip_count: 2,
+    succeeded_clip_count: 1,
+    failed_clip_count: 1,
+    key_events: [
+      { start_seconds: 12, end_seconds: 40, topic: "A 产品讲解", summary: "开场介绍三电" },
+    ],
+    findings: [
+      {
+        dimension: "产品讲解",
+        judgement: "参数直给偏多，缺少场景翻译",
+        evidence_level: "事实",
+        evidence: "电机功率 400 千瓦",
+        start_seconds: 120,
+        suggestion: "先讲越野场景里的通过性",
+      },
+    ],
+    top_issues: [
+      {
+        problem: "权益公布前没有先建立价值",
+        evidence: "现在下订直接减两万",
+        impact: "留资前的信任建立环节",
+        root_cause: "话术方法",
+        action: "权益前先用 30 秒讲清三项核心价值",
+      },
+    ],
+    next_actions: [
+      { goal: "报价前完成价值翻译", how: "报价前 3 分钟按场景讲三项配置", observe: "是否在报价前完成翻译" },
+    ],
+    missing_info: ["本场没有分钟级数据，无法判断停留与转化效果"],
+  };
+
+  /** 已完成识别、尚未复盘的响应：复盘块显示入口按钮。 */
+  function reviewedTask(review: unknown) {
+    const clips = [
+      clipResponse({
+        understanding_status: "succeeded",
+        understanding_segment_count: 2,
+        understanding_attempts: 1,
+        understanding_at: "2026-01-01T00:26:00Z",
+        understanding_warnings: [],
+      }),
+    ];
+    return {
+      ...taskResponse("succeeded", null, METADATA, COVERAGE, clips),
+      understanding: {
+        status: "succeeded",
+        progress: 100,
+        clip_count: 1,
+        segment_count: 2,
+        failed_clip_count: 0,
+        error: null,
+        started_at: "2026-01-01T00:20:00Z",
+        finished_at: "2026-01-01T00:26:00Z",
+        model_name: "test-model",
+      },
+      review,
+    };
+  }
+
+  it("识别完成后可启动复盘，结论按「等级、事件、发现、动作」呈现", async () => {
+    const done = {
+      status: "succeeded",
+      progress: 100,
+      clip_count: 1,
+      segment_count: 2,
+      batch_count: 1,
+      error: null,
+      started_at: "2026-01-01T00:30:00Z",
+      finished_at: "2026-01-01T00:32:00Z",
+      model_name: "test-model",
+      warnings: [],
+      result: REVIEW_RESULT,
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => {
+        if (url === "/api/tasks/t1") return jsonResponse(200, reviewedTask(done));
+        return undefined;
+      },
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    // 结论最先讲清边界：分析等级与定级依据排在结论之前
+    expect(await screen.findByText("定级依据：")).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.one_line)).toBeInTheDocument();
+    expect(screen.getByText("A 产品讲解")).toBeInTheDocument();
+    // 每条判断带证据等级，这是准则里「区分事实与推断」的界面落实
+    expect(screen.getByText("事实")).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.top_issues[0].problem)).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.next_actions[0].goal)).toBeInTheDocument();
+    // 缺口单独成块，不藏在结论里
+    expect(screen.getByText("本场不足以判断")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载 Markdown 报告" })).toBeInTheDocument();
+  });
+
+  it("点击开始复盘会调用接口并把返回的状态写回界面", async () => {
+    const pending = {
+      status: "pending",
+      progress: 0,
+      clip_count: 0,
+      segment_count: 0,
+      batch_count: 0,
+      error: null,
+      started_at: null,
+      finished_at: null,
+      model_name: null,
+      warnings: [],
+      result: null,
+    };
+    const running = {
+      ...pending,
+      status: "running",
+      progress: 10,
+      batch_count: 1,
+      started_at: "2026-01-01T00:30:00Z",
+      model_name: "test-model",
+    };
+
+    let started = false;
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url, init) => {
+        if (url.endsWith("/complete")) return jsonResponse(200, { object_key: "k", size: 20 });
+        if (url === "/api/tasks/t1/review" && init?.method === "POST") {
+          started = true;
+          return jsonResponse(202, reviewedTask(running));
+        }
+        if (url === "/api/tasks/t1") {
+          return jsonResponse(200, reviewedTask(started ? running : pending));
+        }
+        return undefined;
+      },
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    const button = await screen.findByRole("button", { name: "开始复盘分析" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(started).toBe(true));
+    expect(await screen.findByRole("button", { name: "复盘中…" })).toBeDisabled();
+  });
+
+  it("识别未完成时复盘按钮不可用并说明原因", async () => {
+    const noUnderstanding = {
+      ...taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse()]),
+      understanding: null,
+      review: null,
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => (url === "/api/tasks/t1" ? jsonResponse(200, noUnderstanding) : undefined),
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    const button = await screen.findByRole("button", { name: "开始复盘分析" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/还没有识别结果/)).toBeInTheDocument();
+  });
+
+  it("复盘失败时显示原因，且不展示可下载报告", async () => {
+    const failed = {
+      status: "failed",
+      progress: 0,
+      clip_count: 1,
+      segment_count: 2,
+      batch_count: 1,
+      error: "LLMTimeoutError: 模型请求超时（300s）",
+      started_at: "2026-01-01T00:30:00Z",
+      finished_at: "2026-01-01T00:35:00Z",
+      model_name: "test-model",
+      warnings: [],
+      result: null,
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => (url === "/api/tasks/t1" ? jsonResponse(200, reviewedTask(failed)) : undefined),
+    ]);
+
+    render(<App />);
+    selectFile();
+
+    expect(await screen.findByText(/LLMTimeoutError/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下载 Markdown 报告" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始复盘分析" })).toBeInTheDocument();
+  });
+});
