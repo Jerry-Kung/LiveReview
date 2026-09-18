@@ -40,7 +40,7 @@ export default function ClipTable({
   const total = coverage.source_duration_seconds ?? 0;
 
   return (
-    <div className="table-wrap mt-lg">
+    <div className="table-wrap mt-md">
       <table className="table clips clips--split">
         <caption>
           切片列表（按原视频时间顺序），共 {coverage.clip_count} 片

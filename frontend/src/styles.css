@@ -549,11 +549,20 @@ dd {
   min-width: 0;
 }
 
-.page {
+/* 页面宽度按内容密度分两档，不共用一个上限——这是上一版右侧留大片空白的根源。
+   `.page--data` 是数据页（任务详情）：表与数据网格越宽越好用、内容总能填满，因此铺满主区。
+   `.page` 是表单与说明页：内容主体是一列文本，拉满宽屏只会让行太长，按上限居中收口。 */
+.page,
+.page--data {
   display: flex;
   flex-direction: column;
   gap: var(--s4);
-  max-width: 1180px;
+  width: 100%;
+}
+
+.page {
+  max-width: 1240px;
+  margin-inline: auto;
 }
 
 .page-title {
@@ -1052,6 +1061,7 @@ dd {
 .detail-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--s2);
   flex: none;
 }
@@ -1147,19 +1157,22 @@ dd {
   color: var(--brand);
 }
 
-/* 两列结果区：左媒体信息，右切片表 */
-.detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
-  gap: var(--s5);
-  align-items: start;
-}
-
-/* 媒体信息：两列数据布局，标签灰、取值深，不用横向分割线 */
+/* 媒体信息与识别/复盘汇总：参数网格，标签灰、取值深，不用横向分割线。
+   三列是这几种取值条数的公约数：媒体信息 9 项排满 3 行，识别 5 项与复盘 6 项也都排成
+   最后一行的项目数不少于 2，不会出现「最后一行孤零零一项、右边空一大片」。
+   不按视口自动分列：这些是同一份结果里的取值，读的时候逐行扫，列数随窗口拉伸跳变
+   会让人找不到刚看过的那个值。 */
 .facts-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--s5) var(--s4);
+}
+
+/* 面板内的一排短值（切分结论的片段数 / 总时长 / 覆盖校验）：三项均分整行 */
+.facts-grid--inline {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s4);
+  margin-bottom: var(--s4);
 }
 
 .fact-label {
@@ -1729,15 +1742,10 @@ dd {
   .intake-grid {
     grid-template-columns: minmax(0, 1fr) 264px;
   }
-
-  .detail-grid {
-    grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 1100px) {
-  .intake-grid,
-  .detail-grid {
+  .intake-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1766,6 +1774,11 @@ dd {
   .brand-scope,
   .masthead-search {
     display: none;
+  }
+
+  /* 参数网格回落成两列：1024 视口下三列还有 220px 够放最长项，再窄就得折行了 */
+  .facts-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

@@ -110,19 +110,25 @@ function ProcessingFlow({ task }: { task: Task }) {
   );
 }
 
-/** 媒体信息：两列数据布局，标签灰、取值深。 */
+/** 媒体信息：参数网格，标签灰、取值深。
+ *
+ * 取值分三行排，每行是同一类信息，九项正好三行排满：
+ * 第一行「这条录像是什么」，第二行视频轨，第三行音频轨。顺序按核对的习惯走，
+ * 不是按后端字段的顺序；行内换列时仍然读得通，因此不依赖固定的列宽。 */
 function MetadataBlock({ metadata }: { metadata: TaskMetadata }) {
-  // 时长排在最前，其余按「视频 → 音频 → 容器」的核对顺序
   const facts: Array<[string, string]> = [
+    // 第一行：整条录像
     ["时长", formatDuration(metadata.duration_seconds)],
-    ["音频编码", metadata.audio_codec ?? PLACEHOLDER],
     ["分辨率", formatResolution(metadata.width, metadata.height)],
-    ["采样率", metadata.sample_rate !== null ? `${(metadata.sample_rate / 1000).toFixed(1)} kHz` : PLACEHOLDER],
+    ["容器", metadata.format_name ?? PLACEHOLDER],
+    // 第二行：视频轨
     ["视频编码", metadata.video_codec ?? PLACEHOLDER],
-    ["声道", formatChannels(metadata.channels)],
     ["帧率", metadata.frame_rate ?? PLACEHOLDER],
     ["流数", metadata.stream_count !== null ? `${metadata.stream_count}` : PLACEHOLDER],
-    ["容器", metadata.format_name ?? PLACEHOLDER],
+    // 第三行：音频轨
+    ["音频编码", metadata.audio_codec ?? PLACEHOLDER],
+    ["采样率", metadata.sample_rate !== null ? `${(metadata.sample_rate / 1000).toFixed(1)} kHz` : PLACEHOLDER],
+    ["声道", formatChannels(metadata.channels)],
   ];
 
   return (
@@ -175,7 +181,7 @@ export default function TaskDetail({
   const metadata = task.metadata;
 
   return (
-    <div className="page">
+    <div className="page--data">
       <button type="button" className="back-link" onClick={actions.onReset}>
         <IconArrowLeft size={16} />
         返回任务列表
@@ -240,67 +246,68 @@ export default function TaskDetail({
 
       <ProcessingFlow task={task} />
 
-      <div className="detail-grid">
-        {metadata && (
-          <section className="panel" aria-label="媒体信息面板">
-            <div className="panel-head">
-              <IconVideo size={18} />
-              <h3 className="panel-title">媒体信息</h3>
-            </div>
-            <MetadataBlock metadata={metadata} />
-          </section>
-        )}
+      {/* 媒体信息单独成块：九项参数铺满整宽，卡片高度只由内容决定。
+          原先它与切片表并排，但左边是九行短值、右边是十几行的表，高度差注定很大，
+          窄栏下面必然留空块——分开也就没有这个矛盾了。 */}
+      {metadata && (
+        <section className="panel" aria-label="媒体信息面板">
+          <div className="panel-head">
+            <IconVideo size={18} />
+            <h3 className="panel-title">媒体信息</h3>
+          </div>
+          <MetadataBlock metadata={metadata} />
+        </section>
+      )}
 
-        {coverage && (
-          <section className="panel" aria-label="切分结果">
-            <div className="panel-head">
-              <IconVideo size={18} />
-              <h3 className="panel-title">视频切片</h3>
-              <span className="panel-head-side">
-                <span>
-                  共 <span className="num">{coverage.clip_count}</span> 个片段
-                </span>
-                <span>
-                  总时长{" "}
-                  <span className="num">
-                    {formatDuration(coverage.source_duration_seconds ?? null)}
-                  </span>
+      {coverage && (
+        <section className="panel" aria-label="切分结果">
+          <div className="panel-head">
+            <IconVideo size={18} />
+            <h3 className="panel-title">视频切片</h3>
+            <span className="panel-head-side">
+              <span>
+                共 <span className="num">{coverage.clip_count}</span> 个片段
+              </span>
+              <span>
+                总时长{" "}
+                <span className="num">
+                  {formatDuration(coverage.source_duration_seconds ?? null)}
                 </span>
               </span>
+            </span>
+          </div>
+
+          {/* 切分结论的三项取值：片段数 / 总时长 / 覆盖校验。与媒体信息同一套读法 */}
+          <dl className="facts-grid facts-grid--inline" aria-label="切分结论取值">
+            <div>
+              <dt className="fact-label">片段数</dt>
+              <dd className="fact-value">{coverage.clip_count}</dd>
             </div>
+            <div>
+              <dt className="fact-label">总时长</dt>
+              <dd className="fact-value">
+                {formatDuration(coverage.source_duration_seconds ?? null)}
+              </dd>
+            </div>
+            <div>
+              <dt className="fact-label">覆盖校验</dt>
+              <dd className="fact-value">
+                {issues.length === 0 ? "通过" : `${issues.length} 处问题`}
+              </dd>
+            </div>
+          </dl>
 
-            {/* 切分结论的三项取值：片段数 / 总时长 / 覆盖校验。与媒体信息同一套读法 */}
-            <dl className="facts-grid" aria-label="切分结果">
-              <div>
-                <dt className="fact-label">片段数</dt>
-                <dd className="fact-value">{coverage.clip_count}</dd>
-              </div>
-              <div>
-                <dt className="fact-label">总时长</dt>
-                <dd className="fact-value">
-                  {formatDuration(coverage.source_duration_seconds ?? null)}
-                </dd>
-              </div>
-              <div>
-                <dt className="fact-label">覆盖校验</dt>
-                <dd className="fact-value">
-                  {issues.length === 0 ? "通过" : `${issues.length} 处问题`}
-                </dd>
-              </div>
-            </dl>
+          {issues.length > 0 && (
+            <ul className="coverage-issues">
+              {issues.map((issue) => (
+                <li key={`${issue.code}-${issue.message}`}>{issue.message}</li>
+              ))}
+            </ul>
+          )}
 
-            {issues.length > 0 && (
-              <ul className="coverage-issues">
-                {issues.map((issue) => (
-                  <li key={`${issue.code}-${issue.message}`}>{issue.message}</li>
-                ))}
-              </ul>
-            )}
-
-            {clips.length > 0 && <ClipTable clips={clips} coverage={coverage} />}
-          </section>
-        )}
-      </div>
+          {clips.length > 0 && <ClipTable clips={clips} coverage={coverage} />}
+        </section>
+      )}
 
       {/* 识别块在切分未完成时也出现：让用户看到「下一步要做什么」以及为什么还不能做 */}
       <UnderstandingBlock task={task} actions={understanding} refreshKey={refreshKey} />
