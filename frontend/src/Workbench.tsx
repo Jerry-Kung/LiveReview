@@ -16,6 +16,7 @@ import IntakePage from "./IntakePage";
 import TaskDetailPage from "./TaskDetailPage";
 import type { UnderstandingActions } from "./Understanding";
 import type { ReviewActions } from "./Review";
+import type { TaskSection } from "./routing";
 import {
   ApiError,
   completeUpload,
@@ -213,10 +214,14 @@ function useReview(
 /** 从最近任务打开的一条记录：只读取并展示，不在这里发起处理。 */
 function OpenedTask({
   taskId,
+  section,
+  onSection,
   onTaskChange,
   onBackToList,
 }: {
   taskId: string;
+  section: TaskSection;
+  onSection: (section: TaskSection) => void;
   onTaskChange: () => void;
   onBackToList: () => void;
 }) {
@@ -296,6 +301,9 @@ function OpenedTask({
   return (
     <TaskDetailPage
       task={task}
+      section={section}
+      onSection={onSection}
+      taskLoaded
       actions={{
         onRetry: () => void retry(),
         onDelete: () => void remove(),
@@ -314,11 +322,17 @@ function OpenedTask({
 
 export default function Workbench({
   taskId,
+  section,
+  onSection,
   onTaskChange,
   onBackToList,
 }: {
   /** 非空时展示这条历史任务，否则展示本次上传流程。 */
   taskId: string | null;
+  /** 当前子页：上传完成后自动落到「视频信息」，历史任务由 hash 决定。 */
+  section: TaskSection;
+  /** 切换子页：交给外层的 hash 路由，刷新与前进/后退在子页之间也成立。 */
+  onSection: (section: TaskSection) => void;
   /** 任务创建、重试或删除后通知外层刷新最近任务。 */
   onTaskChange?: () => void;
   /** 回到新建任务页（详情页的「返回任务列表」） */
@@ -331,6 +345,15 @@ export default function Workbench({
   const [watching, setWatching] = useState<{ taskId: string; nonce: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  /**
+   * 本次上传流程的子页。
+   *
+   * 地址还停在 `#/new` 时（上传刚提交、还没进任务列表）不能让外层路由接管子页：
+   * 一旦认领成 `#/tasks/:id`，本组件的上传状态机就会随重挂载一起丢掉，界面会弹回上传入口。
+   * 因此这一段用本地状态顶着，等用户从侧栏再打开这条任务时才走 hash 路由。
+   */
+  const [localSection, setLocalSection] = useState<TaskSection>("media");
+  const detailSection = taskId === null ? localSection : section;
   const fileRef = useRef<HTMLInputElement>(null);
   // 识别操作与结果刷新：切分完成后即可在本页直接启动识别，不必走历史记录
   const understanding = useUnderstanding(task, setTask, (message) =>
@@ -386,6 +409,9 @@ export default function Workbench({
       clearPendingUpload();
       setState((prev) => ({ ...prev, phase: "watching", error: null, missingChunks: [] }));
       setWatching(nextWatch(taskId));
+      // 地址仍停在新建页（上传流程不认领地址），子页先在本地顶着：
+      // 这一页本来就是「看着进度走完」，认领地址会连带把上传状态机一起丢掉
+      setLocalSection("media");
       onTaskChange?.();
     },
     [onTaskChange]
@@ -602,6 +628,8 @@ export default function Workbench({
       <OpenedTask
         key={taskId}
         taskId={taskId}
+        section={section}
+        onSection={onSection}
         onTaskChange={onTaskChange ?? (() => {})}
         onBackToList={onBackToList}
       />
@@ -641,6 +669,10 @@ export default function Workbench({
       {showDetail ? (
         <TaskDetailPage
           task={task}
+          section={detailSection}
+          onSection={setLocalSection}
+          sectionLinks={false}
+          taskLoaded={!busy}
           notice={task.error ? null : state.error}
           actions={{
             onRetry: handleRetryTask,

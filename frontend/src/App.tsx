@@ -12,7 +12,7 @@ import LoginDialog from "./LoginDialog";
 import Sidebar from "./Sidebar";
 import Workbench from "./Workbench";
 import { IconChart, IconSettings } from "./icons";
-import { useRoute } from "./routing";
+import { DEFAULT_SECTION, useRoute, type TaskSection } from "./routing";
 import { fetchTasks, type Task } from "./api";
 
 /** 预留功能页：说明「这里会有什么、现在为什么没有」，不假装功能已存在。 */
@@ -77,6 +77,22 @@ export default function App() {
     navigate({ view: "task", taskId });
   };
 
+  /**
+   * 切换任务详情的子页。
+   *
+   * 任务 id 从**当前 hash** 上取，而不是从本次渲染的 `route.taskId`：上传刚完成时
+   * 地址栏还是 `#/new`（任务详情还没被路由认领），此时若按 `route.taskId` 拼地址，
+   * 会算出 `#/new` 这个「什么都不改」的地址，子页跳转就静默失效了。
+   */
+  const handleSection = (section: TaskSection) => {
+    const current = window.location.hash;
+    const taskId = current.startsWith("#/tasks/")
+      ? decodeURIComponent(current.slice("#/tasks/".length).split("/")[0]).trim()
+      : route.taskId;
+    if (!taskId) return;
+    navigate({ view: "task", taskId, section });
+  };
+
   return (
     <div className="app">
       <Header
@@ -127,6 +143,8 @@ export default function App() {
             <Workbench
               key={`${intakeKey}-${route.taskId ?? "new"}`}
               taskId={route.taskId}
+              section={route.section ?? DEFAULT_SECTION}
+              onSection={handleSection}
               onTaskChange={loadTasks}
               onBackToList={handleNewTask}
             />

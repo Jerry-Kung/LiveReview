@@ -1,56 +1,40 @@
 /**
- * 任务详情：一条录屏从上传到结论的全部可见信息。
+ * 任务详情壳层：任务身份 + 子导航 + 当前子页。
  *
- * 版式按用户的核对顺序排列，从身份到结论：
+ * V0.4.1 把原本一屏到底的详情页拆成三个子页（视频信息 / 内容理解 / 复盘分析），
+ * 壳层负责三件不随子页变化的事：
  *
- * 1. **任务身份**——哪个文件、多大、什么编码，加上返回与操作入口，一眼能确认「我看的是哪一场」。
- * 2. **处理流程**——五个阶段的横向节点，当前步骤在哪一段是这一屏最需要的信息。
- * 3. **媒体信息 + 视频切片**——左栏是探测到的媒体参数（两列数据布局，不用横向分割线），
- *    右栏是切片 Data Table。两者并排是因为它们常被一起核对：切片总时长对不对，看左边就够了。
- * 4. **识别结果 / 复盘结论**——由 `Understanding` 与 `Review` 两块承载。
+ * 1. **任务身份常驻**——文件名、状态、时间/体积/分辨率/编码、操作入口（重新执行、查看报告、
+ *    删除）在任何子页都看得见且可操作。越往下走越需要「我正在看哪一场」这个锚点。
+ * 2. **子导航三项常显**——未达条件的子页置灰并写明原因（如「视频处理完成后开放」），
+ *    用户因此能看到完整链路与下一步要做什么，而不是面对一个突然消失的入口。
+ * 3. **默认落在最靠后的可进子页**——从侧栏打开一条已复盘的任务，直接停在复盘结论，
+ *    少两次点击；每条任务只判定一次，之后不因轮询结果变化而跳页。
  *
- * 与处理链路有关的判定逻辑（`STAGES` 与 `stageState`）保持不变，本次只换呈现方式。
+ * 子页拆分只动呈现层：切分、识别、复盘的判定与轮询逻辑（`STAGES`、`stageState`、
+ * `useUnderstanding`、`useReview`）一概未改。
  */
 
+import { useEffect, useRef } from "react";
 import type { Task, TaskMetadata } from "./api";
-import ClipTable from "./ClipTable";
 import UnderstandingBlock, { type UnderstandingActions } from "./Understanding";
 import ReviewBlock, { type ReviewActions } from "./Review";
+import VideoInfoPage from "./VideoInfoPage";
 import {
-  IconArrowLeft,
-  IconCheck,
-  IconCheckCircle,
-  IconVideo,
-} from "./icons";
+  SECTION_ORDER,
+  deepestOpenSection,
+  sectionBlockedReason,
+  sectionTitle,
+} from "./TaskSections";
+import { taskSectionHref, type TaskSection } from "./routing";
+import { IconArrowLeft, IconVideo } from "./icons";
 import {
-  PLACEHOLDER,
-  describeTask,
   formatBytes,
-  formatChannels,
-  formatDuration,
   formatMoment,
   formatResolution,
   taskStatusLabel,
   taskStatusTone,
 } from "./format";
-
-/** 处理链路的阶段划分，与后端进度取值一一对应（0 → 20 → 25 → 40~98 → 100）。 */
-const STAGES: Array<{ key: string; label: string; atLeast: number }> = [
-  { key: "prepare", label: "准备本地副本", atLeast: 0 },
-  { key: "probe", label: "探测媒体信息", atLeast: 20 },
-  { key: "convert", label: "转封装", atLeast: 25 },
-  { key: "split", label: "切分并上传片段", atLeast: 40 },
-  { key: "done", label: "覆盖校验完成", atLeast: 100 },
-];
-
-function stageState(task: Task, atLeast: number, index: number): "done" | "active" | "todo" {
-  if (task.status === "succeeded") return "done";
-  if (task.status === "failed") return task.progress >= atLeast ? "done" : "todo";
-  const nextAtLeast = STAGES[index + 1]?.atLeast ?? Number.POSITIVE_INFINITY;
-  if (task.progress >= nextAtLeast) return "done";
-  if (task.progress >= atLeast) return "active";
-  return "todo";
-}
 
 /** 缩略区：后端不提供视频缩略图，用与实际分辨率同比例的占位块表达「这是一条竖屏录屏」。 */
 function Thumbnail({ metadata }: { metadata: TaskMetadata | null }) {
@@ -69,80 +53,6 @@ function Thumbnail({ metadata }: { metadata: TaskMetadata | null }) {
   );
 }
 
-/** 处理流程：横向节点 + 连线，已完成绿色，当前步骤品牌蓝。 */
-function ProcessingFlow({ task }: { task: Task }) {
-  const label = task.status === "processing" ? "正在处理" : "处理记录";
-
-  return (
-    <section className="panel" aria-label={`${label}：${describeTask(task)}`}>
-      <div className="panel-head">
-        <IconVideo size={18} />
-        <h3 className="panel-title">处理流程</h3>
-        <span className="panel-head-side">
-          <span className="status" data-tone={taskStatusTone(task.status)}>
-            任务：{describeTask(task)}
-          </span>
-        </span>
-      </div>
-
-      <ol className="flow">
-        {STAGES.map((stage, index) => {
-          const stepState = stageState(task, stage.atLeast, index);
-          return (
-            <li className="flow-node" key={stage.key} data-state={stepState}>
-              <span className="flow-dot">
-                {stepState === "done" && <IconCheck size={16} />}
-                {stepState === "active" && <IconCheckCircle size={16} />}
-              </span>
-              <span className="flow-label">{stage.label}</span>
-              <span className="flow-note">
-                {stepState === "done"
-                  ? "完成"
-                  : stepState === "active"
-                    ? `进行中 ${task.progress}%`
-                    : "等待"}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </section>
-  );
-}
-
-/** 媒体信息：参数网格，标签灰、取值深。
- *
- * 取值分三行排，每行是同一类信息，九项正好三行排满：
- * 第一行「这条录像是什么」，第二行视频轨，第三行音频轨。顺序按核对的习惯走，
- * 不是按后端字段的顺序；行内换列时仍然读得通，因此不依赖固定的列宽。 */
-function MetadataBlock({ metadata }: { metadata: TaskMetadata }) {
-  const facts: Array<[string, string]> = [
-    // 第一行：整条录像
-    ["时长", formatDuration(metadata.duration_seconds)],
-    ["分辨率", formatResolution(metadata.width, metadata.height)],
-    ["容器", metadata.format_name ?? PLACEHOLDER],
-    // 第二行：视频轨
-    ["视频编码", metadata.video_codec ?? PLACEHOLDER],
-    ["帧率", metadata.frame_rate ?? PLACEHOLDER],
-    ["流数", metadata.stream_count !== null ? `${metadata.stream_count}` : PLACEHOLDER],
-    // 第三行：音频轨
-    ["音频编码", metadata.audio_codec ?? PLACEHOLDER],
-    ["采样率", metadata.sample_rate !== null ? `${(metadata.sample_rate / 1000).toFixed(1)} kHz` : PLACEHOLDER],
-    ["声道", formatChannels(metadata.channels)],
-  ];
-
-  return (
-    <dl className="facts-grid" aria-label="媒体信息">
-      {facts.map(([label, value]) => (
-        <div key={label}>
-          <dt className="fact-label">{label}</dt>
-          <dd className="fact-value">{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 export type TaskActions = {
   onRetry: () => void;
   onDelete: () => void;
@@ -158,16 +68,35 @@ export default function TaskDetail({
   actions,
   understanding,
   review,
+  section,
+  onSection,
+  taskLoaded,
+  sectionLinks = true,
   refreshKey = 0,
   notice = null,
   onTask,
 }: {
   task: Task;
   actions: TaskActions;
-  /** 识别相关操作：切分未完成的任务也能看到识别块，只是按钮不可用。 */
+  /** 识别相关操作：内容理解页的按钮与轮询都从这里来。 */
   understanding: UnderstandingActions;
-  /** 复盘相关操作：识别未完成时按钮不可用，块本身仍然显示。 */
+  /** 复盘相关操作：复盘分析页的按钮与轮询都从这里来。 */
   review: ReviewActions;
+  /** 当前子页。路由未点名时为默认值，任务读回后由 `onSection` 改写成按进度选中的那一页。 */
+  section: TaskSection;
+  /**
+   * 切换子页。已认领的任务（地址是 `#/tasks/:id`）由外层 hash 路由承担，
+   * 刷新与前进/后退因此在子页之间也成立；本次上传还没认领地址时（仍在 `#/new`）
+   * 由 `Workbench` 用本地状态顶着，此时点得动但刷新会回到新建页——如实反映地址。
+   */
+  onSection: (section: TaskSection) => void;
+  /** 子导航项是否渲染成真链接（地址已认领到这条任务）。 */
+  sectionLinks?: boolean;
+  /**
+   * 任务详情是否已读回。上传完成后挂载的那一帧 `task` 还在路上，此时不足以判定默认子页，
+   * 因此默认子页的改写要等它变 true 再执行。
+   */
+  taskLoaded: boolean;
   /** 识别状态变化时递增，用于让全文面板重新拉取。 */
   refreshKey?: number;
   /** 操作层面的失败（如删除未成功）：与任务自身的失败原因分开呈现。 */
@@ -175,10 +104,27 @@ export default function TaskDetail({
   /** 复盘轮询拿到新状态时回写：复盘结论由任务详情承载。 */
   onTask: (task: Task) => void;
 }) {
-  const coverage = task.coverage;
-  const clips = task.clips ?? [];
-  const issues = coverage?.issues ?? [];
   const metadata = task.metadata;
+  const blockedReason = sectionBlockedReason(task, section);
+  const fallbackSection = deepestOpenSection(task);
+  /**
+   * 把「用户没点名子页」的默认值改写成「按处理进度最靠后的可进子页」：
+   * 从侧栏打开一条已复盘的任务，应该直接停在复盘结论，而不是从视频信息再点两次。
+   *
+   * 三条约束：
+   * - **每条任务只判定一次**。之后轮询把任务推进到下一阶段也不替用户翻页——用户自己点了
+   *   哪页就停哪页。因此记的是「为哪条任务判定过了」，而不是一个布尔量。
+   * - **要等这一条任务真的读回来**。上传完成后挂载的那一帧任务还在路上，此时算出来的
+   *   「最靠后可进子页」必然是默认页，据此改写会把随后该落的页又拽回顶部。
+   * - **改写走 hash 路由**：已认领地址时刷新与前进/后退在子页之间同样成立。
+   */
+  const resolvedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!taskLoaded || resolvedFor.current === task.id) return;
+    resolvedFor.current = task.id;
+    if (blockedReason !== null || fallbackSection !== section) onSection(fallbackSection);
+  }, [taskLoaded, task.id, blockedReason, fallbackSection, section, onSection]);
 
   return (
     <div className="page--data">
@@ -244,76 +190,65 @@ export default function TaskDetail({
         </div>
       </header>
 
-      <ProcessingFlow task={task} />
+      <nav className="subnav" aria-label="任务内容分页">
+        {SECTION_ORDER.map((item) => {
+          const reason = sectionBlockedReason(task, item);
+          const locked = reason !== null;
+          return (
+            <a
+              key={item}
+              className="subnav-item"
+              // 地址未认领时不写 href：此时点了只在本地切页，不该留下一个切不动的地址。
+              // 但没有 href 的 <a> 会丢掉隐式的 link 语义（也是读屏软件识别它的依据），
+              // 因此显式补上 role
+              role="link"
+              href={sectionLinks ? taskSectionHref(task.id, item) : undefined}
+              aria-current={item === section ? "page" : undefined}
+              aria-disabled={locked ? "true" : undefined}
+              title={reason ?? undefined}
+              onClick={(event) => {
+                event.preventDefault();
+                onSection(item);
+              }}
+            >
+              {sectionTitle(item)}
+              {locked && <span className="subnav-lock">{reason}</span>}
+            </a>
+          );
+        })}
+      </nav>
 
-      {/* 媒体信息单独成块：九项参数铺满整宽，卡片高度只由内容决定。
-          原先它与切片表并排，但左边是九行短值、右边是十几行的表，高度差注定很大，
-          窄栏下面必然留空块——分开也就没有这个矛盾了。 */}
-      {metadata && (
-        <section className="panel" aria-label="媒体信息面板">
+      {blockedReason === null ? (
+        <>
+          {section === "media" && <VideoInfoPage task={task} />}
+          {section === "understanding" && (
+            <UnderstandingBlock task={task} actions={understanding} refreshKey={refreshKey} />
+          )}
+          {section === "review" && <ReviewBlock task={task} actions={review} onTask={onTask} />}
+        </>
+      ) : (
+        <section className="panel" aria-label="子页尚未开放">
           <div className="panel-head">
             <IconVideo size={18} />
-            <h3 className="panel-title">媒体信息</h3>
-          </div>
-          <MetadataBlock metadata={metadata} />
-        </section>
-      )}
-
-      {coverage && (
-        <section className="panel" aria-label="切分结果">
-          <div className="panel-head">
-            <IconVideo size={18} />
-            <h3 className="panel-title">视频切片</h3>
+            <h3 className="panel-title">{sectionTitle(section)}</h3>
             <span className="panel-head-side">
-              <span>
-                共 <span className="num">{coverage.clip_count}</span> 个片段
-              </span>
-              <span>
-                总时长{" "}
-                <span className="num">
-                  {formatDuration(coverage.source_duration_seconds ?? null)}
-                </span>
+              <span className="status" data-tone="warn">
+                暂不可用
               </span>
             </span>
           </div>
-
-          {/* 切分结论的三项取值：片段数 / 总时长 / 覆盖校验。与媒体信息同一套读法 */}
-          <dl className="facts-grid facts-grid--inline" aria-label="切分结论取值">
-            <div>
-              <dt className="fact-label">片段数</dt>
-              <dd className="fact-value">{coverage.clip_count}</dd>
-            </div>
-            <div>
-              <dt className="fact-label">总时长</dt>
-              <dd className="fact-value">
-                {formatDuration(coverage.source_duration_seconds ?? null)}
-              </dd>
-            </div>
-            <div>
-              <dt className="fact-label">覆盖校验</dt>
-              <dd className="fact-value">
-                {issues.length === 0 ? "通过" : `${issues.length} 处问题`}
-              </dd>
-            </div>
-          </dl>
-
-          {issues.length > 0 && (
-            <ul className="coverage-issues">
-              {issues.map((issue) => (
-                <li key={`${issue.code}-${issue.message}`}>{issue.message}</li>
-              ))}
-            </ul>
-          )}
-
-          {clips.length > 0 && <ClipTable clips={clips} coverage={coverage} />}
+          <p className="hint">{blockedReason}。</p>
+          <div className="actions mt-lg">
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => onSection(fallbackSection)}
+            >
+              回到{sectionTitle(fallbackSection)}
+            </button>
+          </div>
         </section>
       )}
-
-      {/* 识别块在切分未完成时也出现：让用户看到「下一步要做什么」以及为什么还不能做 */}
-      <UnderstandingBlock task={task} actions={understanding} refreshKey={refreshKey} />
-
-      {/* 复盘块同理：识别没做完时按钮不可用，但用户能看到链路的下一步是什么 */}
-      <ReviewBlock task={task} actions={review} onTask={onTask} />
 
       {task.error && <p className="detail-error">失败原因：{task.error}</p>}
       {notice && <p className="detail-error">{notice}</p>}

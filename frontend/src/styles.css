@@ -588,6 +588,101 @@ dd {
   color: var(--brand);
 }
 
+/* 子导航：任务详情页的三个子页。做成下边线的分段控件而不是卡片式 tab，
+   与「企业级数据工作台」的版式母题一致——层次靠分隔线表达，不靠色块。 */
+.subnav {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s5);
+  border-bottom: 1px solid var(--line);
+  /* 窄屏下三项加说明文字会超宽：允许横向滚动，不折成两行破坏下边线的语意 */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.subnav::-webkit-scrollbar {
+  display: none;
+}
+
+.subnav-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 0 0 var(--s3);
+  margin-bottom: -1px;
+  font-size: var(--fs-body);
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.subnav-item:hover {
+  color: var(--ink);
+}
+
+.subnav-item[aria-current="page"] {
+  color: var(--brand);
+  font-weight: 600;
+  border-bottom-color: var(--brand);
+}
+
+/* 未开放的子页：置灰、不给点击反馈，但右边写明为什么不能进 */
+.subnav-item[aria-disabled="true"] {
+  color: var(--ink-mute);
+  cursor: not-allowed;
+}
+
+.subnav-item[aria-disabled="true"]:hover {
+  color: var(--ink-mute);
+}
+
+.subnav-item[aria-disabled="true"][aria-current="page"] {
+  color: var(--ink-soft);
+  font-weight: 600;
+  border-bottom-color: var(--line);
+}
+
+.subnav-lock {
+  font-size: var(--fs-cap);
+  font-weight: 400;
+  color: var(--ink-mute);
+}
+
+/* 分组器：长列表折成每组十条后的翻组控件。放在表上方，与表的 caption 一起读 */
+.grouper {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+  font-size: var(--fs-cap);
+  color: var(--ink-soft);
+}
+
+.grouper-range {
+  color: var(--ink);
+}
+
+.grouper-page {
+  color: var(--ink-mute);
+}
+
+.grouper-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-left: auto;
+}
+
+/* 小节标题右侧的说明：交代「这里的另一份内容在哪」，不抢标题 */
+.subsection-note {
+  margin-left: auto;
+  font-size: var(--fs-cap);
+  font-weight: 400;
+  color: var(--ink-mute);
+}
+
 /* 面板：白底 + 1px 边框 + 小圆角，无阴影。只有需要视觉隔离的分区才用它 */
 .panel {
   background: var(--surface);
@@ -1379,21 +1474,6 @@ dd {
   flex-wrap: wrap;
 }
 
-.transcript-text {
-  margin-top: var(--s3);
-  max-height: 320px;
-  overflow: auto;
-  padding: var(--s3) var(--s4);
-  background: var(--fill-soft);
-  border: 1px solid var(--line);
-  border-radius: var(--r2);
-  font-family: var(--mono);
-  font-size: var(--fs-cap);
-  line-height: 20px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .segments {
   list-style: none;
   padding: 0;
@@ -1429,6 +1509,12 @@ dd {
 .segment-content {
   font-size: var(--fs-note);
   color: var(--ink);
+}
+
+/* 语气标注：识别时对情绪的主观估计，是这条记录的附注而不是正文 */
+.segment-tone {
+  margin-left: var(--s1);
+  color: var(--ink-mute);
 }
 
 /* 复盘报告：结论 → 事件 → 发现 → 问题 → 动作 → 缺口 */

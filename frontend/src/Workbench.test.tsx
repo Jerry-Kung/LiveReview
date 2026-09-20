@@ -134,6 +134,27 @@ function selectFile() {
   fireEvent.change(input, { target: { files: [file] } });
 }
 
+/**
+ * 切到某个子页。
+ *
+ * V0.4.1 起任务详情拆成三个子页，识别与复盘的内容不再与切片同屏：涉及它们的用例
+ * 必须显式切页，否则断言的是「没切过去时看不到」——那不是被验证的行为。
+ *
+ * 子页要先等到开放（`aria-disabled` 摘掉）再点：子导航三项常显，未开放的点不动，
+ * 点早了什么也不会发生。
+ */
+async function gotoSection(name: "视频信息" | "内容理解" | "复盘分析") {
+  let link: HTMLElement | null = null;
+  // 子导航在任务详情出现之后才存在（上传阶段显示的是上传页），因此先等它渲染出来，
+  // 再等它开放：未开放的项点不动，点早了什么也不会发生。
+  await waitFor(() => {
+    link = screen.queryByRole("link", { name: new RegExp(`^${name}`) });
+    expect(link).not.toBeNull();
+    expect(link).not.toHaveAttribute("aria-disabled", "true");
+  });
+  fireEvent.click(link as unknown as HTMLElement);
+}
+
 describe("上传与任务链路", () => {
   const originalFetch = globalThis.fetch;
 
@@ -596,7 +617,11 @@ describe("切分结果展示", () => {
     render(<App />);
     selectFile();
 
-    expect(await screen.findByText(/任务：已完成/)).toBeInTheDocument();
+    try {
+      expect(await screen.findByText(/任务：已完成/)).toBeInTheDocument();
+    } finally {
+      require("fs").writeFileSync("dbg.json", (screen.getByRole("main") as HTMLElement).innerHTML, "utf8");
+    }
     const split = screen.getByLabelText("切分结果", { selector: "section" });
     const values = Array.from(split.querySelectorAll("dd")).map((node) => node.textContent);
     expect(values).toEqual(["2", "1:02:05", "通过"]);
@@ -640,10 +665,10 @@ describe("切分结果展示", () => {
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
     const table = document.querySelector(".clips--split") as HTMLTableElement;
-    // 撤销切片回看：既没有下载/播放链接，也没有 video 元素
+    // 撤销切片回看：表内既没有下载/播放链接，也没有 video 元素
+    // （页面上另有子导航的 <a>，它们不是切片入口，因此这里只在表内断言）
     expect(table.querySelectorAll("a")).toHaveLength(0);
     expect(document.querySelector("video")).toBeNull();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("覆盖校验有问题时逐条展示", async () => {
@@ -893,9 +918,15 @@ describe("识别结果（V0.2）", () => {
     render(<App />);
     selectFile();
 
+    await new Promise((r) => setTimeout(r, 200));
+    require("fs").writeFileSync("dbg.json", document.body.innerHTML, "utf8");
+    await gotoSection("内容理解");
+
     expect(await screen.findByText(/已识别片段/)).toBeInTheDocument();
     // 汇总给出「识别了多少」，是判断结果能否使用的前提
-    expect(screen.getByText("2 条")).toBeInTheDocument();
+    // （「2 条」在汇总与识别全文的标题计数里各出现一次，这里只要求在汇总里能看到）
+    const summary = screen.getByLabelText("识别汇总");
+    expect(summary.textContent).toContain("2 条");
     expect(screen.getByText("test-model")).toBeInTheDocument();
 
     const table = document.querySelector(".clips--understanding") as HTMLTableElement;
@@ -919,16 +950,18 @@ describe("识别结果（V0.2）", () => {
 
     render(<App />);
     selectFile();
-    await screen.findByText(/已识别片段/);
 
-    fireEvent.click(screen.getByRole("button", { name: "展开识别全文" }));
+    // 识别全文默认直接展示条目：进入内容理解页即拉取，不需要先点「展开」
+    await waitFor(() => expect(screen.getByRole("link", { name: /复盘分析/ })).toBeInTheDocument());
+    await gotoSection("内容理解");
 
-    // 全文与逐条记录都来自同一次拉取，两者内容一致
-    expect(await screen.findByText(/语音识别全文：live.ts/)).toBeInTheDocument();
-    expect(screen.getByText("欢迎来到直播间")).toBeInTheDocument();
+    expect(await screen.findByText("欢迎来到直播间")).toBeInTheDocument();
     expect(screen.getByText("今天这款到手价 199 元")).toBeInTheDocument();
     expect(screen.getByText(/共 1 片，已识别 1 片/)).toBeInTheDocument();
+    // 加工过的条目才是页面上的内容；等宽纯文本全文只作为下载件，不再占版
     expect(screen.getByRole("button", { name: "下载 txt" })).toBeInTheDocument();
+    expect(screen.queryByText(/语音识别全文：live.ts/)).not.toBeInTheDocument();
+    expect(document.querySelector(".transcript-text")).toBeNull();
   });
 
   it("识别失败时给出原因，并允许单独重试该片段", async () => {
@@ -972,6 +1005,9 @@ describe("识别结果（V0.2）", () => {
 
     render(<App />);
     selectFile();
+
+    await waitFor(() => expect(screen.getByRole("link", { name: /复盘分析/ })).toBeInTheDocument());
+    await gotoSection("内容理解");
 
     // 失败原因整条可见（任务级汇总与片段级各出现一次），而不是只显示一个「失败」标签
     const reasons = await screen.findAllByText(/识别请求超时/);
@@ -1017,12 +1053,16 @@ describe("识别结果（V0.2）", () => {
     render(<App />);
     selectFile();
 
+    await waitFor(() => expect(screen.getByRole("link", { name: /复盘分析/ })).toBeInTheDocument());
+    await gotoSection("内容理解");
+
     expect(await screen.findByRole("button", { name: "开始识别语音" })).toBeInTheDocument();
-    // 「还没识别」与「识别出来是空的」必须区分：没有结果时不提供全文入口
-    expect(screen.queryByRole("button", { name: "展开识别全文" })).not.toBeInTheDocument();
+    // 「还没识别」与「识别出来是空的」必须区分：没有结果时不提供全文与下载入口
+    expect(screen.queryByRole("button", { name: "下载 txt" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/识别全文/)).not.toBeInTheDocument();
   });
 
-  it("切片尚未完成时识别按钮不可用并说明原因", async () => {
+  it("切片尚未完成时内容理解页尚未开放并说明原因", async () => {
     mockApi([
       healthRoute,
       createRoute,
@@ -1037,9 +1077,11 @@ describe("识别结果（V0.2）", () => {
     render(<App />);
     selectFile();
 
-    const button = await screen.findByRole("button", { name: "开始识别语音" });
-    expect(button).toBeDisabled();
-    expect(screen.getByText(/尚无切片/)).toBeInTheDocument();
+    // 处理还没结束：内容理解整页不可进，进门处就写明原因，而不是让人进去点一个灰按钮
+    const link = await screen.findByRole("link", { name: /内容理解/ });
+    expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveTextContent("视频处理完成后开放");
+    expect(screen.queryByRole("button", { name: "开始识别语音" })).not.toBeInTheDocument();
   });
 });
 
@@ -1151,8 +1193,13 @@ describe("复盘结论（V0.3）", () => {
     render(<App />);
     selectFile();
 
+    // 这条任务已完成识别，打开后按进度自动落在最靠后的可进子页（复盘分析）
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "复盘分析" })).toHaveAttribute("aria-current", "page")
+    );
     // 结论最先讲清边界：分析等级与定级依据排在结论之前
-    expect(await screen.findByText("定级依据：")).toBeInTheDocument();
+    // （「定级依据：」外面套着 <strong>，因此按子串匹配而不按整段文本匹配）
+    expect(await screen.findByText(/定级依据：/)).toBeInTheDocument();
     expect(screen.getByText(REVIEW_RESULT.one_line)).toBeInTheDocument();
     expect(screen.getByText("A 产品讲解")).toBeInTheDocument();
     // 每条判断带证据等级，这是准则里「区分事实与推断」的界面落实
@@ -1215,7 +1262,7 @@ describe("复盘结论（V0.3）", () => {
     expect(await screen.findByRole("button", { name: "复盘中…" })).toBeDisabled();
   });
 
-  it("识别未完成时复盘按钮不可用并说明原因", async () => {
+  it("识别未完成时复盘分析页尚未开放并说明原因", async () => {
     const noUnderstanding = {
       ...taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse()]),
       understanding: null,
@@ -1233,9 +1280,10 @@ describe("复盘结论（V0.3）", () => {
     render(<App />);
     selectFile();
 
-    const button = await screen.findByRole("button", { name: "开始复盘分析" });
-    expect(button).toBeDisabled();
-    expect(screen.getByText(/还没有识别结果/)).toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: /复盘分析/ });
+    expect(link).toHaveAttribute("aria-disabled", "true");
+    expect(link).toHaveTextContent("内容识别完成后开放");
+    expect(screen.queryByRole("button", { name: "开始复盘分析" })).not.toBeInTheDocument();
   });
 
   it("复盘失败时显示原因，且不展示可下载报告", async () => {
@@ -1264,8 +1312,218 @@ describe("复盘结论（V0.3）", () => {
     render(<App />);
     selectFile();
 
+    await screen.findByRole("link", { name: /复盘分析/ });
+    // 复盘失败的任务同样已开过复盘：打开即落在复盘分析页，失败原因整条可见
     expect(await screen.findByText(/LLMTimeoutError/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "下载 Markdown 报告" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开始复盘分析" })).toBeInTheDocument();
+  });
+});
+
+describe("三子页信息架构（V0.4.1）", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    window.location.hash = "";
+    window.localStorage.clear();
+    setPollIntervalMs(10);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    resetPollIntervalMs();
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  /** 三条任务：只切分完、识别完、复盘完。分别对应三个子页的开放条件。 */
+  const splitOnly = () =>
+    taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })]);
+  const understandingDone = () => ({
+    ...taskResponse("succeeded", null, METADATA, COVERAGE, [
+      clipResponse({ index: 0, understanding_status: "succeeded", understanding_segment_count: 2 }),
+    ]),
+    understanding: {
+      status: "succeeded",
+      progress: 100,
+      clip_count: 1,
+      segment_count: 2,
+      failed_clip_count: 0,
+      error: null,
+      started_at: "2026-01-01T00:20:00Z",
+      finished_at: "2026-01-01T00:26:00Z",
+      model_name: "test-model",
+    },
+  });
+  const reviewDone = () => ({
+    ...understandingDone(),
+    review: {
+      status: "succeeded",
+      progress: 100,
+      clip_count: 1,
+      segment_count: 2,
+      batch_count: 1,
+      error: null,
+      started_at: "2026-01-01T00:30:00Z",
+      finished_at: "2026-01-01T00:32:00Z",
+      model_name: "test-model",
+      warnings: [],
+      result: {
+        one_line: "本场讲清了产品，但报价前的价值翻译不足。",
+        analysis_level: "完整",
+        level_reason: "全部片段识别成功",
+        batch_count: 1,
+        clip_count: 1,
+        succeeded_clip_count: 1,
+        failed_clip_count: 0,
+        key_events: [],
+        findings: [],
+        top_issues: [],
+        next_actions: [],
+        missing_info: [],
+      },
+    },
+  });
+
+  /** 从侧栏最近任务打开这条任务：打开历史任务与「本次上传」是两条不同的入口。 */
+  async function openRecent(task: unknown) {
+    mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined)], [task]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /live\.ts/ }));
+  }
+
+  it("三个子页并列呈现：未开放的置灰并写明什么时候开放", async () => {
+    await openRecent(splitOnly());
+
+    // 只切分完：内容理解与复盘分析都还没到，但用户看得到后面还有两步
+    const understanding = await screen.findByRole("link", { name: /内容理解/ });
+    const review = screen.getByRole("link", { name: /复盘分析/ });
+    expect(understanding).not.toHaveAttribute("aria-disabled", "true");
+    expect(review).toHaveAttribute("aria-disabled", "true");
+    expect(review).toHaveTextContent("内容识别完成后开放");
+    expect(screen.getByRole("link", { name: /视频信息/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("打开已复盘的任务直接落在复盘分析，打开仅识别的任务落在内容理解", async () => {
+    await openRecent(reviewDone());
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "复盘分析" })).toHaveAttribute("aria-current", "page")
+    );
+    expect(screen.getByText("本场讲清了产品，但报价前的价值翻译不足。")).toBeInTheDocument();
+  });
+
+  it("打开仅完成识别的任务落在内容理解", async () => {
+    await openRecent(understandingDone());
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "内容理解" })).toHaveAttribute("aria-current", "page")
+    );
+    expect(screen.getByText(/已识别片段/)).toBeInTheDocument();
+  });
+
+  it("子页写进地址：直接打开带子页的链接就停在那一页", async () => {
+    window.location.hash = "#/tasks/t1/review";
+    const task = reviewDone();
+    mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined)], [task]);
+
+    render(<App />);
+
+    // 刷新后停在原处是路由的基本承诺，子页也不例外
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "复盘分析" })).toHaveAttribute("aria-current", "page")
+    );
+  });
+
+  it("点名了未开放的子页时退回可进的那一页并说明", async () => {
+    window.location.hash = "#/tasks/t1/review";
+    const task = splitOnly();
+    mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined)], [task]);
+
+    render(<App />);
+
+    // 旧链接可能指向一个还没开放的页：退回可进的那一页，而不是给一个空屏
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "视频信息" })).toHaveAttribute("aria-current", "page")
+    );
+  });
+
+  it("切片按组分页，每页不超过十条", async () => {
+    const clips = Array.from({ length: 23 }, (_, index) =>
+      clipResponse({
+        index,
+        start_seconds: index * 10,
+        end_seconds: index * 10 + 10,
+        duration_seconds: 10,
+      })
+    );
+    const task = taskResponse("succeeded", null, METADATA, { ...COVERAGE, clip_count: 23 }, clips);
+    await openRecent(task);
+
+    await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
+
+    const table = document.querySelector(".clips--split") as HTMLTableElement;
+    // 一屏最多十条：几十片一次铺开会把页面拉到无法核对
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(10);
+    expect(screen.getByText(/第 1–10 片 \/ 共 23 片/)).toBeInTheDocument();
+    expect(screen.getByText(/第 1 \/ 3 组/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "下一组" }));
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(10);
+    expect(screen.getByText(/第 11–20 片 \/ 共 23 片/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "末组" }));
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(screen.getByText(/第 21–23 片 \/ 共 23 片/)).toBeInTheDocument();
+  });
+
+  it("识别全文默认展示条目，纯文本只提供下载", async () => {
+    const task = understandingDone();
+    const transcript = {
+      task_id: "t1",
+      filename: "live.ts",
+      status: "succeeded",
+      clip_count: 1,
+      succeeded_clip_count: 1,
+      failed_clip_count: 0,
+      segment_count: 2,
+      model_name: "test-model",
+      clips: [],
+      segments: [
+        {
+          index: 0,
+          clip_index: 0,
+          start_seconds: 0.5,
+          end_seconds: 3.2,
+          duration_seconds: 2.7,
+          content: "欢迎来到直播间",
+          tone: "热情",
+          clip_start_seconds: 0.5,
+          clip_end_seconds: 3.2,
+          out_of_range: false,
+        },
+      ],
+      text: [
+        "# 语音识别全文：live.ts",
+        "[00:00:00.500 - 00:00:03.200] 欢迎来到直播间",
+        "",
+      ].join(String.fromCharCode(10)),
+    };
+
+    mockApi(
+      [
+        healthRoute,
+        (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined),
+        (url) => (url === "/api/tasks/t1/transcript" ? jsonResponse(200, transcript) : undefined),
+      ],
+      [task]
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /live\.ts/ }));
+
+    // 进页即拉取并展示条目，不需要先点「展开」；纯文本不再占版，只留下载入口
+    expect(await screen.findByText("欢迎来到直播间")).toBeInTheDocument();
+    expect(screen.getByText("（热情）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载 txt" })).toBeInTheDocument();
+    expect(document.querySelector(".transcript-text")).toBeNull();
   });
 });
