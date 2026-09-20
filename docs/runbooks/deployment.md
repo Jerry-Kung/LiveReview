@@ -20,6 +20,8 @@
 - **模型接入（V0.2 起）**通过 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL_NAME` 三项配置，对接 OpenAI 兼容的 `responses` 接口（当前使用火山引擎方舟的音画理解模型）。**三项都是识别的前置条件**：缺失时切分链路照常工作，但识别接口直接返回 503 并列出缺失项名称，不会逐片各失败一次。`LLM_TIMEOUT_SECONDS`（单次视频理解请求超时，默认 900 秒）是本版最容易低估的一项——分钟级的片段识别在网络与模型排队叠加后会逼近这个值，素材更长或并发更高时应上调。`LLM_FPS`（送模型的采样帧率，默认 1）、`LLM_MAX_ATTEMPTS`（单片最大尝试次数，默认 3）、`LLM_CONCURRENCY`（片段识别并发数，默认 1，串行）、`LLM_CLIP_URL_TTL_SECONDS`（片段预签名视频地址有效期，默认 7200 秒，须覆盖排队与单次识别耗时）、`LLM_UNDERSTANDING_PROMPT`（识别题面，留空使用默认的「识别片段中的所有人声语音并判断语气」）。**复盘（V0.3 起）复用同一组 `LLM_*` 配置**，另有 `REVIEW_TIMEOUT_SECONDS`（单次复盘请求超时，默认 300 秒，纯文本分析量级远小于视频理解）、`REVIEW_MAX_ATTEMPTS`（单次复盘的最大尝试次数，默认 3）、`REVIEW_INPUT_CHARS_PER_CALL`（单次调用送出的转写字符数上限，默认 20000，超出则按记录边界分批后合并）。
 - 预处理与切分（V0.1.5 起）通过 `FFMPEG_PATH`（形式同 `FFPROBE_PATH`）、`SPLIT_MAX_DURATION_SECONDS`（单片最长时长，默认 3600 秒）、`SPLIT_MAX_CLIP_BYTES`（单片最大体积，默认 `1073741824` 即 1GiB）、`SPLIT_MIN_CLIP_SECONDS`（体积超限时递归对半的下限，默认 1 秒）、`SPLIT_TIMEOUT_SECONDS`（单次转封装/切片调用超时，默认 600 秒）、`FFMPEG_MAX_OUTPUT_BYTES`（ffmpeg stderr 收集上限，默认 8MB）配置。**`SPLIT_MAX_DURATION_SECONDS` 与 `SPLIT_MAX_CLIP_BYTES` 是硬约束**：调小它们会让片段更多、切分更慢，调大则可能超过后续识别环节的输入限制。
 
+- **用户登录（V0.5 起）**通过 `AUTH_USERS` 配置初始化用户，格式为逗号分隔的 `账号:口令哈希[:显示名]`；口令哈希用 `cd backend && uv run python -m app.auth.passwd`（交互式）或加 `--generate`（生成随机口令）产出。明文口令不写进任何文件、不进仓库。`AUTH_SESSION_SECRET` 是会话票据的签名密钥，用 `python -m app.auth.passwd --secret` 生成；**未配置时服务仍能启动**，但每次启动随机生成，重启即让所有人掉线，正式环境务必固定配置。`AUTH_SESSION_TTL_SECONDS`（会话有效期，默认 12 小时）。`AUTH_COOKIE_SECURE` 仅在 HTTPS 下置为 `true`，本地开发是 http，置 true 会导致登录后立刻掉线。鉴权配置有问题时启动日志会逐条告警，登录后的 `GET /api/auth/status` 也能看到同一份清单。
+
 ## 3. 本地运行
 
 ### 后端
@@ -74,6 +76,27 @@ docker compose -f docker/docker-compose.yml exec backend python -c "from app.con
 
 `storage_backend` 应为 `tos`，缺失列表应为 `[]`，否则说明 `backend/.env` 未生效，无需继续自检。
 
+## 4.1 账号运维（V0.5 起）
+
+本版没有注册机制，账号只能手工配置。三类常见操作：
+
+**新增一个用户**（在宿主机执行，输出直接粘进 `backend/.env` 的 `AUTH_USERS`）：
+
+```bash
+cd backend
+uv run python -m app.auth.passwd --generate   # 明文口令打到 stderr，哈希打到 stdout
+```
+
+多个用户以逗号分隔，可带显示名：`AUTH_USERS=alice:<哈希>:爱丽丝,bob:<哈希>`。改完重启后端生效。
+
+**改口令**：重新生成一份哈希替换掉原条目即可，账号名不变。**换完之后旧登录态不会自动失效**——票据签名里没有口令指纹，需要一并更换 `AUTH_SESSION_SECRET` 才能立刻把所有人踢下线（代价是全员重登）。
+
+**忘记口令**：本版没有找回入口。用 `--generate` 生成新口令并替换该账号的哈希。
+
+**锁定了账号**：同一账号 1 分钟内连续失败 5 次会被拒绝直到窗口滑过（错误文案是「登录尝试过于频繁」）。这是进程内计数，重启后端即清空。阈值集中在 `backend/app/auth/service.py` 的 `FAILURE_WINDOW_SECONDS` / `FAILURE_LIMIT`。
+
+**部署到 HTTPS 时**把 `AUTH_COOKIE_SECURE` 置为 `true`，否则会话票据会在明文连接上传输。nginx 反代已透传 `Host`，后端据此校验写请求的 `Origin` 同源；若外层还有一层网关改写了 Host，需要一并转发 `X-Forwarded-Host`，否则写操作会返回 403。
+
 ## 5. 对象存储连通自检（测试环境）
 
 测试环境 `STORAGE_BACKEND` 固定为 `tos`，缺凭据时启动与自检都会明确失败，不会静默回落本地 Mock。
@@ -92,7 +115,7 @@ docker compose -f docker/docker-compose.yml exec backend python -m app.storage.v
 
 ## 6. 上传与任务（V0.1.3 起）
 
-前端在 `http://localhost:12439` 的工作台界面选择文件后，按后端下发的分片大小切片并发上传；上传完成后后端合并、写入对象存储 `original/` 前缀，并把任务交给后台执行器。页面可关闭，任务在容器内继续推进；重新打开页面可在侧栏的「历史记录」看到状态，点击某条记录可在工作区查看它的探测结论与切片结果。切片结果只以文字形式呈现（时间范围、时长、体积、状态），界面不提供视频播放与回看。用户登录为预置功能区：填写后仅切换页眉的账号显示，不请求后端。
+前端在 `http://localhost:12439` 的工作台界面选择文件后，按后端下发的分片大小切片并发上传；上传完成后后端合并、写入对象存储 `original/` 前缀，并把任务交给后台执行器。页面可关闭，任务在容器内继续推进；重新打开页面可在侧栏的「历史记录」看到状态，点击某条记录可在工作区查看它的探测结论与切片结果。切片结果只以文字形式呈现（时间范围、时长、体积、状态），界面不提供视频播放与回看。所有 /api 接口自 V0.5 起要求登录：未登录访问会落在登录页，任务列表、上传与下载口一律返回 401。
 
 ### 大文件上传自检（测试环境）
 

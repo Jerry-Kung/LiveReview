@@ -174,23 +174,18 @@ def test_retry_unknown_clip_is_rejected(client, model):
     assert resp.status_code == 409
 
 
-def test_understanding_requires_configured_model(client, model, test_settings, monkeypatch):
-    """模型未配置时明确拒绝，不进入执行——缺配置应当立即暴露，而不是逐片各失败一次。"""
-    from app.config import get_settings
+def test_understanding_requires_configured_model(client, model, use_settings):
+    """模型未配置时明确拒绝，不进入执行——缺配置应当立即暴露，而不是逐片各失败一次。
 
-    unconfigured = test_settings.model_copy(
-        update={"llm_base_url": None, "llm_api_key": None, "llm_model_name": None}
-    )
-    from app.main import app
+    配置替换走 `use_settings`：它同时改依赖注入与任务体直接取用的单例，比只改其中一处
+    可靠——只改一处的话，请求放行之后任务体仍会拿着旧配置去调模型。
+    """
+    use_settings(llm_base_url=None, llm_api_key=None, llm_model_name=None)
 
-    app.dependency_overrides[get_settings] = lambda: unconfigured
-    try:
-        task_id = _prepare(client)
-        resp = client.post(f"/api/tasks/{task_id}/understanding")
-        assert resp.status_code == 503
-        assert "LLM_API_KEY" in resp.json()["detail"]
-    finally:
-        app.dependency_overrides.pop(get_settings, None)
+    task_id = _prepare(client)
+    resp = client.post(f"/api/tasks/{task_id}/understanding")
+    assert resp.status_code == 503
+    assert "LLM_API_KEY" in resp.json()["detail"]
 
 
 # —— 汇总与全文 ——

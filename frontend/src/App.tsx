@@ -1,5 +1,9 @@
 /**
- * 应用壳层：页眉 + 侧栏（主导航 / 最近任务）+ 主工作区。
+ * 应用壳层：登录门槛 + 页眉 + 侧栏（主导航 / 最近任务）+ 主工作区。
+ *
+ * 登录态是这一层的第一道判断：未登录时**不渲染工作台**，只给登录页。这不只是界面上的
+ * 遮掩——工作台里的每个请求都要带会话 Cookie，后端会把未登录的请求一并拒掉，因此
+ * 这里省掉的是一串注定失败的请求，而不是一次安全检查。真正的边界在后端。
  *
  * 主区按 hash 路由显示三种内容：新建任务页、从最近任务里打开的一条既有任务、以及两个
  * 预留功能页（数据分析 / 设置，本版没有后端能力，只给出说明页）。本业务链路始终是
@@ -7,12 +11,14 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import Header, { type SessionUser } from "./Header";
-import LoginDialog from "./LoginDialog";
+import Header from "./Header";
+import LoginPage from "./LoginPage";
 import Sidebar from "./Sidebar";
 import Workbench from "./Workbench";
 import { IconChart, IconSettings } from "./icons";
 import { DEFAULT_SECTION, useRoute, type TaskSection } from "./routing";
+import { login } from "./session";
+import { useSession } from "./session";
 import { fetchTasks, type Task } from "./api";
 
 /** 预留功能页：说明「这里会有什么、现在为什么没有」，不假装功能已存在。 */
@@ -43,12 +49,11 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [user, setUser] = useState<SessionUser>(null);
   const [query, setQuery] = useState("");
   // 递增计数：新建上传任务时让 Workbench 重挂载，丢掉上一次任务的界面状态
   const [intakeKey, setIntakeKey] = useState(0);
   const { route, navigate } = useRoute();
+  const { session, setUser, signOut } = useSession();
 
   const loadTasks = useCallback(async () => {
     try {
@@ -63,9 +68,13 @@ export default function App() {
     }
   }, []);
 
+  const authenticated = session.status === "authenticated";
+
   useEffect(() => {
-    void loadTasks();
-  }, [loadTasks]);
+    // 只在已登录后取任务列表：未登录时这个请求必然 401，还会把「会话失效」的提示
+    // 挂在刚打开页面的用户脸上——他本来就没登录，不需要被通知会话过期
+    if (authenticated) void loadTasks();
+  }, [authenticated, loadTasks]);
 
   const handleNewTask = () => {
     setIntakeKey((value) => value + 1);
@@ -93,15 +102,43 @@ export default function App() {
     navigate({ view: "task", taskId, section });
   };
 
+  const handleSignIn = async (username: string, password: string) => {
+    const user = await login(username, password);
+    // 重新拉一次最近任务：登录前那份列表可能来自上一次会话，不该直接沿用
+    setHistoryLoading(true);
+    setUser(user);
+  };
+
+  const handleSignOut = () => {
+    signOut();
+    // 退出后清掉任务与筛选词：下次登录时不应先看到上一位使用者的列表
+    setTasks([]);
+    setQuery("");
+    setHistoryLoading(true);
+  };
+
+  if (session.status === "loading") {
+    // 会话在 HttpOnly Cookie 里，前端读不到，必须先问一次后端。
+    // 这一屏只在首次进入时出现一瞬，作用是不闪一下登录页再跳进工作台。
+    return (
+      <div className="boot" role="status" aria-live="polite">
+        正在载入…
+      </div>
+    );
+  }
+
+  if (session.status === "anonymous") {
+    return <LoginPage onSignIn={handleSignIn} reason={session.reason} />;
+  }
+
   return (
     <div className="app">
       <Header
-        user={user}
+        user={session.user}
         query={query}
         onQuery={setQuery}
         onNewTask={handleNewTask}
-        onSignIn={() => setLoginOpen(true)}
-        onSignOut={() => setUser(null)}
+        onSignOut={handleSignOut}
       />
 
       <div className="layout">
@@ -151,15 +188,6 @@ export default function App() {
           )}
         </main>
       </div>
-
-      <LoginDialog
-        open={loginOpen}
-        onClose={() => setLoginOpen(false)}
-        onSignIn={(next) => {
-          setUser(next);
-          setLoginOpen(false);
-        }}
-      />
     </div>
   );
 }

@@ -1,11 +1,16 @@
 """应用配置：统一从环境变量读取，凭据不落代码不落仓库。"""
 
+import logging
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.auth.config import AuthUser, parse_users
+from app.auth.session import generate_secret, secret_is_weak
 from app.llm.base import LLMConfig
 from app.storage.base import StorageConfig
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -16,7 +21,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.3.0"
+    app_version: str = "0.5.0"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -89,6 +94,17 @@ class Settings(BaseSettings):
     # 中文按「1 汉字 ≈ 1 token」估算，20000 字约 2 万 token，留足输出与系统提示的余量
     review_input_chars_per_call: int = 20000
 
+    # 用户登录（V0.5）：无注册机制，初始化用户直接写在环境变量里。
+    # 格式为逗号分隔的 `账号:口令哈希[:显示名]`，哈希用 `python -m app.auth.passwd` 生成。
+    auth_users: str | None = None
+    # 会话票据的签名密钥。留空则每次启动随机生成——开发可用，但重启即全员掉线。
+    # 换掉这把密钥等价于「立即失效所有已签发的票据」（见 app/auth/session.py）。
+    auth_session_secret: str | None = None
+    # 会话有效期（秒）：默认 12 小时，覆盖一个工作日的连续使用
+    auth_session_ttl_seconds: int = 12 * 3600
+    # 仅 HTTPS 下发送会话 Cookie：本地开发为 http，须保持关闭，部署到 HTTPS 时打开
+    auth_cookie_secure: bool = False
+
     @property
     def storage_missing_fields(self) -> list[str]:
         """列出缺失的存储必填项名称；只返回名称，不回显任何取值。"""
@@ -143,6 +159,61 @@ class Settings(BaseSettings):
             review_timeout_seconds=self.review_timeout_seconds,
             review_max_attempts=self.review_max_attempts,
         )
+
+    # ---- 用户登录（V0.5）----
+
+    @property
+    def auth_user_map(self) -> dict[str, AuthUser]:
+        """解析 `AUTH_USERS` 得到的账号映射。
+
+        每次访问重新解析而不是缓存：解析本身是字符串切分，开销可忽略，而缓存会引入
+        「配置改了但映射还是旧的」这类只会在热更新路径上暴露的问题。配置写坏时抛
+        `AuthConfigError`——调用点集中在启动校验与登录接口，两处都会把它变成明确报错。
+        """
+        return parse_users(self.auth_users)
+
+    @property
+    def auth_users_configured(self) -> bool:
+        return bool(self.auth_user_map)
+
+    @property
+    def auth_session_secret_configured(self) -> bool:
+        """是否显式配置了签名密钥。未配置时服务仍可运行，但重启会让登录态全部失效。"""
+        return bool((self.auth_session_secret or "").strip())
+
+    @property
+    def auth_session_secret_value(self) -> str:
+        """实际用于签名的密钥：配置了就用配置，否则生成一把随机的兜底。
+
+        兜底值通过 `lru_cache` 固定在同一进程的多次访问上——若每次访问都重新随机，
+        签发与校验会用两把不同的密钥，登录永远不通过。
+        """
+        configured = (self.auth_session_secret or "").strip()
+        if configured:
+            return configured
+        return _fallback_secret()
+
+    @property
+    def auth_warnings(self) -> list[str]:
+        """启动时的鉴权配置告警；不回显任何取值。"""
+        warnings: list[str] = []
+        if not self.auth_users_configured:
+            warnings.append("AUTH_USERS 未配置：没有任何账号可登录，请先生成口令哈希并写入环境变量")
+        if not self.auth_session_secret_configured:
+            warnings.append(
+                "AUTH_SESSION_SECRET 未配置：本次使用随机密钥，服务重启后所有登录态失效"
+            )
+        elif secret_is_weak(self.auth_session_secret or ""):
+            warnings.append("AUTH_SESSION_SECRET 过短（少于 16 字节），签名强度不足，建议重新生成")
+        return warnings
+
+
+@lru_cache
+def _fallback_secret() -> str:
+    """未配置 AUTH_SESSION_SECRET 时的进程内兜底密钥。"""
+    secret = generate_secret()
+    logger.warning("AUTH_SESSION_SECRET 未配置，已生成临时签名密钥（重启后失效）")
+    return secret
 
 
 @lru_cache

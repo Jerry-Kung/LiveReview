@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { resetPollIntervalMs, setPollIntervalMs } from "./polling";
+import { SESSION } from "./test/fixtures";
 
 const HEALTH = {
   status: "ok",
@@ -113,7 +114,8 @@ function mockApi(
 ) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    // 任务列表是壳层启动时就发的：默认给空列表，用例不必逐个声明
+    // 会话与任务列表都是壳层启动时就发的：默认给已登录 + 空列表，用例不必逐个声明
+    if (url === "/api/auth/session") return jsonResponse(200, SESSION);
     if (url.startsWith("/api/tasks?")) return jsonResponse(200, { items: tasks });
     for (const route of routes) {
       const response = route(url, init);
@@ -127,6 +129,17 @@ const healthRoute = (url: string) => (url.startsWith("/health") ? jsonResponse(2
 const createRoute = (url: string) =>
   url === "/api/uploads" ? jsonResponse(201, UPLOAD_CREATED) : undefined;
 const chunkRoute = (url: string) => (url.includes("/chunks/") ? jsonResponse(204, null) : undefined);
+
+/**
+ * 渲染应用并等过「正在载入」。
+ *
+ * 登录态存在 HttpOnly Cookie 里，前端读不到，因此壳层挂载后要先问一次后端才能决定
+ * 显示登录页还是工作台。这一步是异步的，直接对页面断言会撞上还没落定的载入态。
+ */
+async function renderApp() {
+  render(<App />);
+  await waitFor(() => expect(screen.queryByText("正在载入…")).not.toBeInTheDocument());
+}
 
 function selectFile() {
   const input = screen.getByLabelText("选择录屏文件");
@@ -176,7 +189,7 @@ describe("上传与任务链路", () => {
 
   it("初始展示上传入口与说明", async () => {
     mockApi([healthRoute]);
-    render(<App />);
+    await renderApp();
     // 挂载时会先查一次有没有没传完的上传，上传入口在那之后才出现
     expect(await screen.findByText(/上传一场直播录屏/)).toBeInTheDocument();
     expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
@@ -207,7 +220,7 @@ describe("上传与任务链路", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
 
     // 提示里带上已传体积，用户能确认这就是上次那次上传
     expect(await screen.findByText(/这次上传还没传完/)).toBeInTheDocument();
@@ -248,7 +261,7 @@ describe("上传与任务链路", () => {
       (url) => (url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("processing")) : undefined),
     ]);
 
-    render(<App />);
+    await renderApp();
 
     // 不必再选一次文件：分片已经全在服务端，剩下的是后端的事
     await waitFor(() => expect(completed).toBe(1));
@@ -272,7 +285,7 @@ describe("上传与任务链路", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
@@ -300,7 +313,7 @@ describe("上传与任务链路", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     expect(await screen.findByText("上传中")).toBeInTheDocument();
@@ -321,7 +334,7 @@ describe("上传与任务链路", () => {
           : undefined,
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     expect(await screen.findByText("上传未完成")).toBeInTheDocument();
@@ -347,7 +360,7 @@ describe("上传与任务链路", () => {
           : undefined,
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     expect(await screen.findByText(/还有 1 个分片未上传/)).toBeInTheDocument();
@@ -372,7 +385,7 @@ describe("上传与任务链路", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     expect(await screen.findByText(/失败原因：.*request_id=mock-0001/)).toBeInTheDocument();
@@ -403,7 +416,7 @@ describe("上传与任务链路", () => {
     ]);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     const button = await screen.findByRole("button", { name: "删除视频" });
@@ -433,7 +446,7 @@ describe("上传与任务链路", () => {
     ]);
     vi.spyOn(window, "confirm").mockReturnValue(false);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     fireEvent.click(await screen.findByRole("button", { name: "删除视频" }));
@@ -458,7 +471,7 @@ describe("上传与任务链路", () => {
     ]);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     fireEvent.click(await screen.findByRole("button", { name: "删除视频" }));
@@ -469,7 +482,7 @@ describe("上传与任务链路", () => {
 
   it("页眉不出现后端、对象存储与版本这些内部字样", async () => {
     mockApi([healthRoute]);
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => expect(screen.getByText(/还没有任务/)).toBeInTheDocument());
     expect(screen.queryByText("后端")).not.toBeInTheDocument();
@@ -489,7 +502,7 @@ describe("上传与任务链路", () => {
           : undefined,
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
@@ -529,7 +542,7 @@ describe("上传与任务链路", () => {
           : undefined,
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
@@ -550,7 +563,7 @@ describe("上传与任务链路", () => {
       (url) => (url.startsWith("/api/tasks/") ? jsonResponse(200, taskResponse("processing")) : undefined),
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：处理中/)).toBeInTheDocument());
@@ -572,7 +585,7 @@ describe("上传与任务链路", () => {
           : undefined,
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     expect(await screen.findByText(/失败原因：ProbeError/)).toBeInTheDocument();
@@ -614,7 +627,7 @@ describe("切分结果展示", () => {
       ])
     );
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     try {
@@ -635,7 +648,7 @@ describe("切分结果展示", () => {
       ])
     );
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
@@ -660,7 +673,7 @@ describe("切分结果展示", () => {
       taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })])
     );
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
@@ -679,7 +692,7 @@ describe("切分结果展示", () => {
       }, [clipResponse()])
     );
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/失败原因：SplitError/)).toBeInTheDocument());
@@ -694,7 +707,7 @@ describe("切分结果展示", () => {
       ])
     );
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/失败原因：StorageServerError/)).toBeInTheDocument());
@@ -704,7 +717,7 @@ describe("切分结果展示", () => {
   it("未切分的任务不展示切分结果", async () => {
     mockTask(taskResponse("processing", null, METADATA));
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：处理中/)).toBeInTheDocument());
@@ -721,7 +734,7 @@ describe("切分结果展示", () => {
       }, [])
     );
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
@@ -744,41 +757,30 @@ describe("工作台壳层", () => {
     vi.restoreAllMocks();
   });
 
-  it("页眉展示品牌与用户登录入口", async () => {
+  it("已登录时页眉展示品牌与当前账号，不再出现登录入口", async () => {
     mockApi([healthRoute]);
-    render(<App />);
+    await renderApp();
 
     expect(screen.getByRole("heading", { name: "LiveReview" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "用户登录" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /测试用户/ })).toBeInTheDocument();
+    // 已经登录了，页面上不该再有第二个登录入口
+    expect(screen.queryByRole("button", { name: "用户登录" })).not.toBeInTheDocument();
     expect(screen.queryByText("后端")).not.toBeInTheDocument();
   });
 
-  it("登录为预留功能区：提交后进入账号态并说明未接入后端", async () => {
-    mockApi([healthRoute]);
-    render(<App />);
+  it("账号菜单里可退出登录，退出后回到登录页", async () => {
+    mockApi([
+      healthRoute,
+      (url) => (url === "/api/auth/logout" ? jsonResponse(204, null) : undefined),
+    ]);
+    await renderApp();
 
-    fireEvent.click(screen.getByRole("button", { name: "用户登录" }));
-    const dialog = screen.getByRole("dialog", { name: "用户登录" });
-    expect(dialog.textContent).toContain("预留功能区");
+    fireEvent.click(screen.getByRole("button", { name: /测试用户/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /退出登录/ }));
 
-    fireEvent.change(screen.getByLabelText("账号"), { target: { value: "林可" } });
-    fireEvent.click(screen.getByRole("button", { name: "进入工作台" }));
-
-    // 弹层关闭，页眉改为账号态
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByText("林可")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /林可/ })).toBeInTheDocument();
-  });
-
-  it("账号为空时不进入账号态并给出提示", async () => {
-    mockApi([healthRoute]);
-    render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "用户登录" }));
-    fireEvent.click(screen.getByRole("button", { name: "进入工作台" }));
-
-    expect(screen.getByText("请填写登录账号。")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /林可/ })).not.toBeInTheDocument();
+    // 退回登录页并说明是主动退出，而不是让用户面对一个没有解释的登录框
+    expect(await screen.findByLabelText("账号")).toBeInTheDocument();
+    expect(screen.getByText("你已退出登录。")).toBeInTheDocument();
   });
 
   it("侧栏最近任务列出既有任务，点击后在工作区展示该任务结果", async () => {
@@ -787,7 +789,7 @@ describe("工作台壳层", () => {
       history,
     ]);
 
-    render(<App />);
+    await renderApp();
 
     const item = await screen.findByRole("button", { name: /live\.ts/ });
     fireEvent.click(item);
@@ -800,7 +802,7 @@ describe("工作台壳层", () => {
 
   it("没有任务时给出空态说明", async () => {
     mockApi([healthRoute], []);
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByText(/还没有任务/)).toBeInTheDocument();
   });
@@ -808,12 +810,13 @@ describe("工作台壳层", () => {
   it("任务列表读取失败时说明原因，不影响工作区上传入口", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === "/api/auth/session") return jsonResponse(200, SESSION);
       if (url.startsWith("/health")) return jsonResponse(200, HEALTH);
       if (url.startsWith("/api/tasks?")) return jsonResponse(503, { detail: "任务列表暂不可用" });
       throw new Error(`未覆盖的请求：${url}`);
     }) as unknown as typeof fetch;
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByText("任务列表暂不可用")).toBeInTheDocument();
     expect(screen.getByLabelText("选择录屏文件")).toBeInTheDocument();
@@ -915,7 +918,7 @@ describe("识别结果（V0.2）", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await new Promise((r) => setTimeout(r, 200));
@@ -948,7 +951,7 @@ describe("识别结果（V0.2）", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     // 识别全文默认直接展示条目：进入内容理解页即拉取，不需要先点「展开」
@@ -1003,7 +1006,7 @@ describe("识别结果（V0.2）", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByRole("link", { name: /复盘分析/ })).toBeInTheDocument());
@@ -1050,7 +1053,7 @@ describe("识别结果（V0.2）", () => {
       (url) => (url === "/api/tasks/t1" ? jsonResponse(200, pendingTask) : undefined),
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await waitFor(() => expect(screen.getByRole("link", { name: /复盘分析/ })).toBeInTheDocument());
@@ -1074,7 +1077,7 @@ describe("识别结果（V0.2）", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     // 处理还没结束：内容理解整页不可进，进门处就写明原因，而不是让人进去点一个灰按钮
@@ -1190,7 +1193,7 @@ describe("复盘结论（V0.3）", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     // 这条任务已完成识别，打开后按进度自动落在最靠后的可进子页（复盘分析）
@@ -1252,7 +1255,7 @@ describe("复盘结论（V0.3）", () => {
       },
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     const button = await screen.findByRole("button", { name: "开始复盘分析" });
@@ -1277,7 +1280,7 @@ describe("复盘结论（V0.3）", () => {
       (url) => (url === "/api/tasks/t1" ? jsonResponse(200, noUnderstanding) : undefined),
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     const link = await screen.findByRole("link", { name: /复盘分析/ });
@@ -1309,7 +1312,7 @@ describe("复盘结论（V0.3）", () => {
       (url) => (url === "/api/tasks/t1" ? jsonResponse(200, reviewedTask(failed)) : undefined),
     ]);
 
-    render(<App />);
+    await renderApp();
     selectFile();
 
     await screen.findByRole("link", { name: /复盘分析/ });
@@ -1389,7 +1392,7 @@ describe("三子页信息架构（V0.4.1）", () => {
   /** 从侧栏最近任务打开这条任务：打开历史任务与「本次上传」是两条不同的入口。 */
   async function openRecent(task: unknown) {
     mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined)], [task]);
-    render(<App />);
+    await renderApp();
     fireEvent.click(await screen.findByRole("button", { name: /live\.ts/ }));
   }
 
@@ -1426,7 +1429,7 @@ describe("三子页信息架构（V0.4.1）", () => {
     const task = reviewDone();
     mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined)], [task]);
 
-    render(<App />);
+    await renderApp();
 
     // 刷新后停在原处是路由的基本承诺，子页也不例外
     await waitFor(() =>
@@ -1439,7 +1442,7 @@ describe("三子页信息架构（V0.4.1）", () => {
     const task = splitOnly();
     mockApi([healthRoute, (url) => (url === "/api/tasks/t1" ? jsonResponse(200, task) : undefined)], [task]);
 
-    render(<App />);
+    await renderApp();
 
     // 旧链接可能指向一个还没开放的页：退回可进的那一页，而不是给一个空屏
     await waitFor(() =>
@@ -1517,7 +1520,7 @@ describe("三子页信息架构（V0.4.1）", () => {
       ],
       [task]
     );
-    render(<App />);
+    await renderApp();
     fireEvent.click(await screen.findByRole("button", { name: /live\.ts/ }));
 
     // 进页即拉取并展示条目，不需要先点「展开」；纯文本不再占版，只留下载入口

@@ -18,9 +18,10 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **`backend/app/media/`**：媒体处理（ffprobe 探测、ffmpeg 转封装与切分、覆盖校验）的调用、解析与本地产物路径约定；只依赖配置与标准库，不感知数据库、HTTP 与对象存储。
 - **`backend/app/llm/`**：模型接入。`base.py` 定义契约与领域异常，`client.py` 为基于 OpenAI 兼容接口的实现（视频理解走 `responses`，复盘走 `chat.completions`），`prompts.py` / `review_prompts.py` 为两条链路的提示词，`parsing.py` 为模型输出的解析、时间对齐与复盘结论归一；业务代码只依赖本包，不接触模型厂商 SDK。
 - **`backend/app/transcript.py`**：识别结果汇总。对外给两份产物：人工核对用的整场全文（接口与导出）与复盘节点用的输入文本（带时间戳与语气标注，按记录边界分批）；被 `routers/understanding.py` 与 `tasks/review.py` 调用。
-- **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针，`uploads.py`、`tasks.py`、`understanding.py` 与 `review.py` 面向前端（统一 `/api` 前缀）。
+- **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针（公开），`auth.py` 承载登录、退出与当前身份，`uploads.py`、`tasks.py`、`understanding.py` 与 `review.py` 面向前端（统一 `/api` 前缀，整组要求登录）。
+- **`backend/app/auth/`**：用户鉴权。`config.py` 解析环境变量里的初始化用户，`password.py` 做 PBKDF2 单向校验，`session.py` 签发与校验签名票据，`service.py` 比对凭据并按账号节流失败次数，`passwd.py` 是生成口令哈希与签名密钥的命令行工具，`__init__.py` 是对外的 FastAPI 依赖与 Cookie 读写。
 - **`backend/app/storage/`**：对象存储的契约与实现，详见下节。
-- **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（页眉 + 侧栏 + 工作区），`Header.tsx` 承载服务状态与用户区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `Understanding.tsx` / `Review.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。用户登录为预置功能区（登录态仅前端，不请求后端）；历史记录读既有任务列表接口，账号隔离待登录接入。
+- **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（登录门槛 + 页眉 + 侧栏 + 工作区），`LoginPage.tsx` 是未登录时的整屏登录页，`session.ts` 是当前身份的唯一起点，`Header.tsx` 承载品牌、搜索与账号区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `Understanding.tsx` / `Review.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。历史记录读既有任务列表接口，账号隔离尚未实现（V0.5 的用户只用于访问控制，不切分数据）。
 
 ## 本地产物
 

@@ -7,29 +7,28 @@
  * （`GET /api/tasks?limit=20`），因此文案写的是「筛选最近任务」而不是「搜索全部任务」。
  * 等后端提供检索能力时，这里换成真正的查询即可，界面承诺不需要改。
  *
- * 用户登录是预留功能区，只承载界面状态，后端尚未提供账号体系，界面明确标注「未接入」，
- * 不做假的登录成功反馈。
+ * 账号区自 V0.5 起接的是**真实登录态**：身份来自 HttpOnly Cookie 背后的会话，
+ * 退出登录会真的请求后端把会话作废。这里不再有「角色」——本版没有角色机制，
+ * 显示一个永远相同的角色只会让人误以为存在权限差异。
  */
 
 import { useEffect, useRef, useState } from "react";
-import { IconChevronDown, IconPlus, IconSearch, IconUser } from "./icons";
-
-export type SessionUser = { name: string; role: string } | null;
+import { IconChevronDown, IconLogout, IconPlus, IconSearch } from "./icons";
+import type { SessionUser } from "./session";
 
 export default function Header({
   user,
   query,
   onQuery,
   onNewTask,
-  onSignIn,
   onSignOut,
 }: {
+  /** 已登录身份。工作台只在登录后渲染，因此这里不为空。 */
   user: SessionUser;
   /** 侧栏「最近任务」的筛选词 */
   query: string;
   onQuery: (value: string) => void;
   onNewTask: () => void;
-  onSignIn: () => void;
   onSignOut: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -83,45 +82,42 @@ export default function Header({
           新建任务
         </button>
 
-        {user ? (
-          <div className="account" ref={accountRef}>
-            <button
-              type="button"
-              className="account-trigger"
-              onClick={() => setMenuOpen((open) => !open)}
-              aria-expanded={menuOpen}
-              aria-haspopup="menu"
-            >
-              <span className="avatar" aria-hidden="true">
-                {user.name.slice(0, 1)}
-              </span>
-              <span className="account-name">{user.name}</span>
-              <IconChevronDown size={16} />
-            </button>
-
-            {menuOpen && (
-              <div className="account-menu" role="menu">
-                <p className="account-menu-role">{user.role}</p>
-                <button
-                  type="button"
-                  className="account-menu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onSignOut();
-                  }}
-                >
-                  退出登录
-                </button>
-              </div>
-            )}
-          </div>
-        ) : (
-          <button type="button" className="btn" onClick={onSignIn}>
-            <IconUser size={16} />
-            用户登录
+        <div className="account" ref={accountRef}>
+          <button
+            type="button"
+            className="account-trigger"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+          >
+            <span className="avatar" aria-hidden="true">
+              {user.display_name.slice(0, 1)}
+            </span>
+            <span className="account-name">{user.display_name}</span>
+            <IconChevronDown size={16} />
           </button>
-        )}
+
+          {menuOpen && (
+            <div className="account-menu" role="menu">
+              {/* 显示名可能与账号不同（如「测试用户」与 tester），两行都给出来便于核对身份 */}
+              <p className="account-menu-role">
+                {user.display_name === user.username ? user.username : `${user.username} 已登录`}
+              </p>
+              <button
+                type="button"
+                className="account-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSignOut();
+                }}
+              >
+                <IconLogout size={16} />
+                退出登录
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

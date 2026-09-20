@@ -273,7 +273,10 @@ dd {
 }
 
 .account-menu-item {
-  display: block;
+  /* 退出登录带图标：与「新建任务」这类纯文字项拉开层次 */
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
   width: 100%;
   padding: 6px var(--s3);
   font: inherit;
@@ -1718,47 +1721,7 @@ dd {
   border-radius: var(--r2);
 }
 
-/* ── 登录弹层 ───────────────────────────────────────────────────────── */
-
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(17, 24, 39, 0.4);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 96px var(--s4) var(--s6);
-  overflow-y: auto;
-  z-index: 20;
-}
-
-.dialog {
-  width: 100%;
-  max-width: 400px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r3);
-  padding: var(--s5);
-}
-
-.dialog-title {
-  font-size: var(--fs-section);
-  font-weight: 600;
-  margin-bottom: var(--s2);
-}
-
-.dialog-note {
-  font-size: var(--fs-note);
-  line-height: 20px;
-  color: var(--ink-soft);
-  margin-bottom: var(--s5);
-}
-
-.dialog-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s4);
-}
+/* ── 表单字段：登录页使用；工作台里的参数编辑尚未接入 ─────────────── */
 
 .field {
   display: flex;
@@ -1791,6 +1754,80 @@ dd {
 .field-notice {
   font-size: var(--fs-note);
   color: var(--error);
+}
+
+/* ── 登录页与启动态 ─────────────────────────────────────────────────── */
+
+/* 未登录时占据整个视口：这不是工作台上的一个弹层，而是进入工作台的门。 */
+.login-screen {
+  min-height: 100vh;
+  background: var(--canvas);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s8) var(--s4);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r3);
+  padding: var(--s6);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s6);
+}
+
+/* 品牌字号回到页面标题档：这是页面的主标题，不是工具条里的小字 */
+.login-brand .brand-name {
+  font-size: var(--fs-page);
+}
+
+.login-notice {
+  font-size: var(--fs-note);
+  line-height: 20px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r1);
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s4);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.login-submit {
+  justify-content: center;
+  height: 36px;
+}
+
+.login-foot {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-cap);
+  line-height: 18px;
+  color: var(--ink-mute);
+}
+
+/* 首次进入时问一次会话的过渡态：一瞬即过，只给一行字，不给骨架屏 */
+.boot {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-mute);
+  font-size: var(--fs-note);
 }
 
 /* ── 预留功能页（数据分析 / 设置） ─────────────────────────────────── */

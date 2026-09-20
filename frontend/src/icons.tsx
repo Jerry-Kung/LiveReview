@@ -226,11 +226,12 @@ export function IconAlert({ size = 16, className }: IconProps) {
   );
 }
 
-export function IconUser({ size = 18, className }: IconProps) {
+export function IconLogout({ size = 18, className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} className={className} aria-hidden="true" {...BOX}>
-      <circle cx="12" cy="9" r="3.5" />
-      <path d="M5.5 19.5a6.5 6.5 0 0 1 13 0" />
+      <path d="M14 6.5V5a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 5 5v14a1.5 1.5 0 0 0 1.5 1.5h6A1.5 1.5 0 0 0 14 19v-1.5" />
+      <path d="M10 12h9" />
+      <path d="M16.5 8.5 20 12l-3.5 3.5" />
     </svg>
   );
 }

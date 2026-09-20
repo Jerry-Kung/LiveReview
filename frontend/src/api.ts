@@ -2,7 +2,10 @@
  * 后端接口封装：上传与任务链路。
  *
  * 与后端 `app/schemas.py` 的契约一一对应；后端返回的中文失败原因为用户可见文案。
+ * 登录态在 HttpOnly Cookie 里，不在这里读写——当前身份见 `session.ts`。
  */
+
+import { notifyUnauthorized } from "./session";
 
 export type UploadCreateResponse = {
   upload_id: string;
@@ -247,9 +250,16 @@ function isMissingChunks(value: unknown): value is MissingChunks {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(path, init);
+    // 登录态在 HttpOnly Cookie 里，必须显式带上同源凭据，否则每个请求都会是未登录
+    response = await fetch(path, { credentials: "same-origin", ...init });
   } catch {
     throw new ApiError("无法连接后端服务，请确认服务是否已启动", 0);
+  }
+
+  if (response.status === 401) {
+    // 会话过期：通知壳层退回登录页，再把失败交给调用方。
+    // 两件事都要做——只通知的话，正在轮询的代码会继续以为自己在正常工作。
+    notifyUnauthorized();
   }
 
   if (!response.ok) {

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.auth.service import LoginThrottle
 from app.config import Settings, get_settings
 from app.database import get_db
 from app.llm import use_client
@@ -19,6 +20,20 @@ from tests.fake_llm import FakeReviewClient, FakeUnderstandingClient
 
 CHUNK_SIZE = 1024 * 1024
 FILE_SIZE = 3 * CHUNK_SIZE  # 3 片，便于构造缺片与乱序场景
+
+# 测试账号与口令：V0.5 起业务路由全部要求登录，各链路测试统一用这一组凭据
+TEST_USERNAME = "tester"
+TEST_PASSWORD = "test-password-1"
+TEST_SESSION_SECRET = "test-session-secret-value"
+# 哈希迭代次数压到最小：真实取值是 24 万次，测试里每条用例都跑一遍只会拖慢套件
+TEST_HASH_ITERATIONS = 1_000
+
+
+def hash_for_test(password: str) -> str:
+    """生成测试用口令哈希：迭代次数取最小值，避免拖慢整套用例。"""
+    from app.auth.password import hash_password
+
+    return hash_password(password, iterations=TEST_HASH_ITERATIONS)
 
 
 def fake_ffprobe_args() -> list[str]:
@@ -59,6 +74,7 @@ def test_settings(media_root: Path) -> Settings:
     # _env_file=None：不读本机 .env，避免本地凭据影响测试结果
     # ffprobe/ffmpeg 指向假实现：本机不部署 FFmpeg，但处理链路仍需被完整覆盖
     # 模型配置给一组假值：识别链路的编排无需真实凭据即可覆盖
+    auth_users = f"{TEST_USERNAME}:{hash_for_test(TEST_PASSWORD)}:测试用户"
     return Settings(
         _env_file=None,
         media_root=str(media_root),
@@ -70,6 +86,8 @@ def test_settings(media_root: Path) -> Settings:
         llm_model_name="test-model",
         llm_timeout_seconds=30,
         llm_max_attempts=2,
+        auth_users=auth_users,
+        auth_session_secret=TEST_SESSION_SECRET,
     )
 
 
@@ -119,7 +137,11 @@ class _SyncExecutor:
 
 @pytest.fixture
 def client(db_session_factory, test_settings: Settings, storage, monkeypatch) -> TestClient:
-    """装配测试客户端：库、存储与后台执行器全部替换为可控实现。"""
+    """装配测试客户端：库、存储与后台执行器全部替换为可控实现。
+
+    V0.5 起业务接口要求登录，这里在装配完成后自动登录一次，使既有链路的测试不必
+    各自重复登录动作；验证「未登录会被拦住」的用例请用 `anonymous_client`。
+    """
     from app.main import app
     from app import uploads as uploads_module
 
@@ -132,6 +154,9 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_settings] = lambda: test_settings
+    # 鉴权依赖在函数内导入配置工厂（模块顶层互相导入会成环），因此要替换的是
+    # `app.config` 里那个名字：它才是 `_settings()` 每次调用时真正去取的对象
+    monkeypatch.setattr("app.config.get_settings", lambda: test_settings)
     # 各业务模块用 `from app.storage import get_storage` 直接绑定，因此按模块逐个替换
     monkeypatch.setattr("app.storage.get_storage", lambda: storage)
     monkeypatch.setattr("app.deletion.get_storage", lambda: storage)
@@ -153,8 +178,63 @@ def client(db_session_factory, test_settings: Settings, storage, monkeypatch) ->
         "app.tasks.understanding.get_understanding_client", lambda: FakeUnderstandingClient()
     )
     monkeypatch.setattr("app.tasks.review.get_review_client", lambda: FakeReviewClient())
+    # 节流按账号在进程内存里计数，用例之间必须隔离，否则前一条用例的失败次数会累积
+    monkeypatch.setattr("app.auth.service._throttle", LoginThrottle())
 
     with TestClient(app) as test_client:
+        login(test_client)
         yield test_client
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def use_settings(monkeypatch, test_settings: Settings):
+    """在测试内替换应用读到的配置。
+
+    走 `dependency_overrides` 而不是 monkeypatch 模块属性：鉴权依赖从依赖注入取配置，
+    只改某个模块里的函数引用不会影响它——那会变成一条「看起来改了、其实没生效」的测试。
+    """
+
+    def apply(**changes):
+        from app.main import app
+
+        updated = test_settings.model_copy(update=changes)
+        app.dependency_overrides[get_settings] = lambda: updated
+        monkeypatch.setattr("app.config.get_settings", lambda: updated)
+        # 任务体不走依赖注入，直接取配置单例，替换配置时一并指向新值
+        monkeypatch.setattr("app.tasks.runner.get_settings", lambda: updated)
+        monkeypatch.setattr("app.tasks.understanding.get_settings", lambda: updated)
+        monkeypatch.setattr("app.tasks.review.get_settings", lambda: updated)
+        return updated
+
+    return apply
+
+
+@pytest.fixture
+def anonymous_client(client: TestClient) -> TestClient:
+    """未登录的客户端：与 `client` 同一个应用实例，但清掉了会话 Cookie。"""
+    client.cookies.clear()
+    return client
+
+
+def login(client: TestClient, username: str = TEST_USERNAME, password: str = TEST_PASSWORD):
+    """登录并让客户端持有会话 Cookie。"""
+    response = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200, response.text
+    return response
+
+
+@pytest.fixture
+def model(monkeypatch) -> FakeReviewClient:
+    """注入假复盘客户端并返回它，供断言调用次数与入参。
+
+    复盘链路用 `from app.llm import ...` 直接绑定函数名，因此补丁要打在**使用点**上
+    （`app.tasks.review`），打在 `app.llm` 上不会生效。
+
+    放在 conftest 而非 test_review.py：鉴权用例也要跑通「识别 → 复盘」才能验证下载口，
+    两处各写一份同样的夹具会让「补丁打在哪里」这条例外知识分叉。
+    """
+    fake = FakeReviewClient()
+    monkeypatch.setattr("app.tasks.review.get_review_client", lambda: fake)
+    return fake

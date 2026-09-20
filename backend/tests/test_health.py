@@ -1,3 +1,5 @@
+"""健康检查契约：公开可达、只回可用性、不回运行细节。"""
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -11,19 +13,21 @@ def test_health_returns_ok():
     data = resp.json()
     assert data["status"] in ("ok", "degraded")
     assert data["service"] == "LiveReview"
-    assert data["version"] == "0.3.0"
+    assert data["version"] == "0.5.0"
     assert data["environment"] == "development"
     assert data["database"] in ("ok", "degraded")
-    assert data["storage"] in ("configured", "not_configured", "unavailable")
-    assert isinstance(data["storage_missing"], list)
+    assert data["storage"] in ("ok", "unavailable")
 
 
-def test_health_reports_storage_not_configured_without_credentials(monkeypatch):
-    """缺凭据时返回 not_configured 且不降级：用受控 Settings，不依赖本机 .env 是否存在。
+def test_health_does_not_expose_runtime_details():
+    """未登录也能访问，因此这里不能出现模型型号、桶名与缺失项名称。"""
+    data = client.get("/health").json()
+    for leaked in ("storage_missing", "llm", "llm_missing"):
+        assert leaked not in data
 
-    严格钉住核心契约：数据库正常 + 存储 not_configured ⇒ 整体 status 必须为 "ok"，
-    因此显式桩定数据库探针为 True，断言 status 严格相等，而非只做取值范围检查。
-    """
+
+def test_health_stays_ok_without_storage_credentials(monkeypatch):
+    """缺凭据时存储回落 Mock，上传链路仍可用，整体状态不降级。"""
     from app.config import Settings
     from app.routers import health as health_module
 
@@ -33,65 +37,30 @@ def test_health_reports_storage_not_configured_without_credentials(monkeypatch):
     monkeypatch.setattr(health_module, "get_settings", lambda: settings)
     monkeypatch.setattr(health_module, "check_database_ok", lambda: True)
 
-    resp = client.get("/health")
-    data = resp.json()
-    assert data["storage"] == "not_configured"
-    assert "TOS_ACCESS_KEY" in data["storage_missing"]
-    # 未配置存储不使整体状态降级：数据库正常时必须严格为 ok
+    data = client.get("/health").json()
+    assert data["storage"] == "ok"
     assert data["status"] == "ok"
 
 
-def test_health_reports_storage_configured(monkeypatch):
-    """已配置存储时返回 configured：用桩 Settings 避免真实读取 .env。
-
-    这里桩掉 build_storage 只为隔离健康检查自身的"construct 成功→configured"这一条分支；
-    真实「有效凭据 + 真实工厂」的组合由 tests/storage/test_factory.py::test_auto_with_credentials_uses_tos 覆盖，
-    此处不重复做集成断言。
-    """
-    from app.routers import health as health_module
-
-    class FakeSettings:
-        app_name = "LiveReview"
-        app_version = "0.2.0"
-        app_env = "development"
-        storage_configured = True
-        storage_missing_fields: list[str] = []
-        # 健康检查自 V0.2 起也回显模型配置状态，桩对象需要给出这两个属性
-        llm_configured = True
-        llm_missing_fields: list[str] = []
-
-    monkeypatch.setattr(health_module, "get_settings", lambda: FakeSettings())
-    # FakeSettings 是精简桩对象，不具备真实 build_storage 所需的 storage_backend 等属性，
-    # 此处额外桩掉 build_storage 以隔离"配置齐全→configured"这一条路径。
-    monkeypatch.setattr(health_module, "build_storage", lambda _settings: object())
-    resp = client.get("/health")
-    data = resp.json()
-    assert data["storage"] == "configured"
-    assert data["storage_missing"] == []
-    assert data["status"] in ("ok", "degraded")  # 取决于数据库探针
-
-
 def test_health_reports_storage_unavailable_when_build_fails(monkeypatch):
+    """已配置存储但构造失败：整体降级，探针据此重启容器。"""
     from app.routers import health as health_module
     from app.storage import StorageClientError
 
     class FakeSettings:
         app_name = "LiveReview"
-        app_version = "0.2.0"
+        app_version = "0.5.0"
         app_env = "development"
         storage_configured = True
         storage_missing_fields: list[str] = []
-        # 健康检查自 V0.2 起也回显模型配置状态，桩对象需要给出这两个属性
-        llm_configured = True
-        llm_missing_fields: list[str] = []
 
     def boom(_settings):
         raise StorageClientError("未安装 TOS SDK")
 
     monkeypatch.setattr(health_module, "get_settings", lambda: FakeSettings())
     monkeypatch.setattr(health_module, "build_storage", boom)
-    resp = client.get("/health")
-    data = resp.json()
+
+    data = client.get("/health").json()
     assert data["storage"] == "unavailable"
     assert data["status"] == "degraded"
 
@@ -100,42 +69,16 @@ def test_health_reports_database_degraded(monkeypatch):
     from app.config import Settings
     from app.routers import health
 
-    def fake_check() -> bool:
-        return False
-
     for name in ("TOS_ACCESS_KEY", "TOS_SECRET_KEY", "TOS_ENDPOINT", "TOS_REGION", "TOS_BUCKET"):
         monkeypatch.delenv(name, raising=False)
 
-    monkeypatch.setattr(health, "check_database_ok", fake_check)
+    monkeypatch.setattr(health, "check_database_ok", lambda: False)
     monkeypatch.setattr(health, "get_settings", lambda: Settings(_env_file=None))
+
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "degraded"
     assert data["database"] == "degraded"
-    assert data["storage"] == "not_configured"  # 未配置不影响整体状态
-
-
-def test_health_reports_llm_not_configured(monkeypatch):
-    """模型未配置时在健康检查里明确标出缺失项名称，不泄露取值本身。
-
-    缺模型配置不算服务降级：切分链路不依赖模型，服务整体仍是 ok。
-    """
-    from app.routers import health as health_module
-
-    class FakeSettings:
-        app_name = "LiveReview"
-        app_version = "0.2.0"
-        app_env = "development"
-        storage_configured = True
-        storage_missing_fields: list[str] = []
-        llm_configured = False
-        llm_missing_fields = ["LLM_API_KEY"]
-
-    monkeypatch.setattr(health_module, "get_settings", lambda: FakeSettings())
-    monkeypatch.setattr(health_module, "build_storage", lambda _settings: object())
-
-    data = client.get("/health").json()
-    assert data["llm"] == "not_configured"
-    assert data["llm_missing"] == ["LLM_API_KEY"]
-    assert data["status"] == "ok"
+    # 未配置存储不影响整体状态
+    assert data["storage"] == "ok"

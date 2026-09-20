@@ -292,3 +292,45 @@ class TaskResponse(BaseModel):
 
 class TaskListResponse(BaseModel):
     items: list[TaskResponse]
+
+
+# ---- 用户鉴权（V0.5）----
+
+
+class LoginRequest(BaseModel):
+    """登录请求。口令长度只做上限约束：下限由配置侧的口令策略决定，不在这里承诺。"""
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class UserResponse(BaseModel):
+    """当前登录者。`display_name` 只用于界面称呼，不参与鉴权。"""
+
+    username: str
+    display_name: str
+
+
+class SessionResponse(BaseModel):
+    """登录态：登录与「查询当前身份」共用同一份结构。"""
+
+    user: UserResponse
+
+
+class StatusResponse(BaseModel):
+    """登录后可见的运行配置状态。
+
+    缺失项只给名称，不给取值；`auth_warnings` 是启动时鉴权配置的问题清单（如未配置
+    签名密钥），让人在界面上就能看见「重启会掉线」这类隐患。
+    """
+
+    version: str
+    environment: str
+    database: str
+    storage: str
+    storage_missing: list[str] = Field(default_factory=list)
+    llm: str
+    llm_missing: list[str] = Field(default_factory=list)
+    auth_users: int
+    auth_session_secret_configured: bool
+    auth_warnings: list[str] = Field(default_factory=list)

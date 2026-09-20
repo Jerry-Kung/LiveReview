@@ -443,10 +443,14 @@ def test_concurrent_chunk_uploads_keep_all_bytes(client, media_root):
 
     data = _create(client)
     upload_id = data["upload_id"]
+    # 这里绕过 TestClient 直接用 ASGI 传输，Cookie 不会自动带上，须显式透传浏览器持有的会话
+    session_cookies = dict(client.cookies)
 
     async def upload_all() -> list[int]:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", cookies=session_cookies
+        ) as ac:
             responses = await asyncio.gather(
                 *[
                     ac.put(f"/api/uploads/{upload_id}/chunks/{index}", content=_chunk_body(index))

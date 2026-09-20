@@ -1,4 +1,12 @@
-"""健康检查路由：供编排探针与前端调用。"""
+"""健康检查路由：供编排探针与前端调用。
+
+刻意保持**公开**：容器编排的 healthcheck 不能先登录。因此这里只回答一件事——服务与它
+的必需依赖是否可用，不暴露运行细节。
+
+V0.5 起收敛了回显内容：对象存储与模型的配置状态、缺失项名称原先挂在这里，现在移到
+登录后的 `/api/auth/status`。「用了哪个模型、缺哪个密钥」对未登录者没有用处，却是一份
+现成的情报。存储可用性本身仍需参与整体状态判定，因为它影响业务能否跑通。
+"""
 
 import logging
 
@@ -13,39 +21,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _storage_state(settings) -> tuple[str, list[str]]:
-    """返回 (存储状态, 缺失配置项)。
-
-    configured：凭据齐全且实现可构造；
-    not_configured：缺必填项，服务仍可用（本地无凭据时存储回落 Mock，上传链路仍可验证）；
-    unavailable：已配置但构造失败，整体服务应视为降级。
-    """
+def _storage_available(settings) -> bool:
+    """对象存储是否可用：未配置视为可用（回落 Mock，上传链路仍能验证），构造失败为不可用。"""
     if not settings.storage_configured:
-        return "not_configured", settings.storage_missing_fields
+        return True
     try:
         build_storage(settings)
     except Exception as exc:  # noqa: BLE001 —— 探针不应因存储异常中断
         logger.error("对象存储初始化失败：%s", exc)
-        return "unavailable", []
-    return "configured", []
+        return False
+    return True
 
 
 @router.get("/health")
 def health() -> dict:
     settings = get_settings()
     db_ok = check_database_ok()
-    storage_state, storage_missing = _storage_state(settings)
-    healthy = db_ok and storage_state != "unavailable"
+    storage_ok = _storage_available(settings)
     return {
-        "status": "ok" if healthy else "degraded",
+        "status": "ok" if (db_ok and storage_ok) else "degraded",
         "service": settings.app_name,
         "version": settings.app_version,
         "environment": settings.app_env,
         "database": "ok" if db_ok else "degraded",
-        "storage": storage_state,
-        "storage_missing": storage_missing,
-        # 模型配置（V0.2）：只回显状态与缺失项名称，不回显 base_url 与 api_key。
-        # 缺模型配置不算服务降级——切分链路不依赖模型，只是识别不可用。
-        "llm": "configured" if settings.llm_configured else "not_configured",
-        "llm_missing": settings.llm_missing_fields,
+        # 只给可用性，不给存储类型、桶名与缺失项名称
+        "storage": "ok" if storage_ok else "unavailable",
     }

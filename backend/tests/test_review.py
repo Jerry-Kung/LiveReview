@@ -88,16 +88,6 @@ def _understood(client: TestClient, task_id: str) -> None:
     assert resp.status_code == 202, resp.text
 
 
-@pytest.fixture
-def model(monkeypatch) -> FakeReviewClient:
-    """注入假复盘客户端并返回它，供断言调用次数与入参。
-
-    复盘链路用 `from app.llm import ...` 直接绑定函数名，因此补丁要打在**使用点**上
-    （`app.tasks.review`），打在 `app.llm` 上不会生效。
-    """
-    fake = FakeReviewClient()
-    monkeypatch.setattr("app.tasks.review.get_review_client", lambda: fake)
-    return fake
 
 
 def set_script(model: FakeReviewClient, *items, repeat_last: bool = False) -> None:
