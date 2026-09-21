@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Backend local database
+backend/data/
+
+# Backend local media artifacts (upload chunks and assembled temp files)
+backend/media/
+
+# 本地测试素材（GB 级录屏，不入库）
+videos/
+
+admin.txt

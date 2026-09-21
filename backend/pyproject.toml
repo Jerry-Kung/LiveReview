@@ -1,0 +1,26 @@
+[project]
+name = "liverreview-backend"
+version = "0.2.0"
+description = "LiveReview 后端服务"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "pydantic-settings>=2.4",
+    "tos>=2.6.0",
+    "openai>=1.40",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    # 该用例要读未经测试夹具改动的原始取值（如口令哈希的真实迭代次数）
+    "original: 跳过 conftest 的 fast_password_hashing 打桩",
+]
