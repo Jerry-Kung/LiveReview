@@ -112,7 +112,9 @@ python -m app.auth.init_admin --username admin --password '<口令>' --display-n
 
 **会话的存放与清理**：登录态在 `sessions` 表里，Cookie 只携带令牌，服务端保存的是它的 SHA-256 摘要。有效期默认 12 小时、每次访问顺延，绝对上限 7 天（`AUTH_SESSION_TTL_SECONDS` / `AUTH_SESSION_ABSOLUTE_TTL_SECONDS`）。过期记录在撞上时即时删除，服务启动时再扫一遍，不需要定时任务。**要踢掉某个账号的全部会话**，改一次口令即可，不必再换签名密钥。
 
-**部署到 HTTPS 时**把 `AUTH_COOKIE_SECURE` 置为 `true`，否则会话令牌会在明文连接上传输。nginx 反代已透传 `Host`，后端据此校验写请求的 `Origin` 同源；若外层还有一层网关改写了 Host，需要一并转发 `X-Forwarded-Host`，否则写操作会返回 403。
+**部署到 HTTPS 时**把 `AUTH_COOKIE_SECURE` 置为 `true`，否则会话令牌会在明文连接上传输。
+
+**写请求报 403「请求来源不被信任」**：后端校验 `Origin` 与请求自身的 Host 是否同源。代理转发的 Host 只要把端口吃掉（`proxy_set_header Host $host` 就会），浏览器发来的 `Origin: http://<主机>:<端口>` 与后端看到的 `Host: <主机>` 就对不上，登录会被判成跨站。**nginx 已改为转发 `$http_host`（保留端口）**，不要改回 `$host`；后端同时认 `X-Forwarded-Host`，且 Host 里没有端口时按同源放行，外层再加网关也不必额外配置。**这个 403 与账号、口令、数据库都无关**，不要往那个方向排查。
 
 ## 5. 对象存储连通自检（测试环境）
 

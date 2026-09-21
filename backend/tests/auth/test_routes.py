@@ -367,3 +367,63 @@ def test_login_from_foreign_origin_is_rejected(anonymous_client):
         headers={"Origin": "https://evil.example.com"},
     )
     assert resp.status_code == 403
+
+
+def test_write_request_with_port_in_origin_is_allowed(client):
+    """带端口的 Origin 必须放行：浏览器发来的 Origin 永远带端口。
+
+    TestClient 默认的 Host 不带端口，这里显式带上，覆盖「端口一致即同源」这条判据。
+    """
+    resp = client.post(
+        "/api/auth/logout",
+        headers={"Origin": "http://testserver:12439", "Host": "testserver:12439"},
+    )
+    assert resp.status_code == 204
+
+
+def test_write_request_is_allowed_when_proxy_strips_port_from_host(client):
+    """经 nginx 访问时 Host 被 $host 去掉了端口，不能让正常登录变成 403。
+
+    这是测试环境实际踩到的故障：浏览器发 `Origin: http://<主机>:12439`，nginx 转发
+    `Host: <主机>`，逐字符比对 netloc 就会判成跨站，登录接口返回 403「请求来源不被信任」。
+    """
+    resp = client.post(
+        "/api/auth/logout",
+        headers={"Origin": "http://liverreview.example.com:12439", "Host": "liverreview.example.com"},
+    )
+    assert resp.status_code == 204
+
+
+def test_write_request_is_allowed_with_forwarded_host(client):
+    """外层网关改写 Host 时，按 X-Forwarded-Host 判定来源。"""
+    resp = client.post(
+        "/api/auth/logout",
+        headers={
+            "Origin": "http://liverreview.example.com:12439",
+            "Host": "backend:12439",
+            "X-Forwarded-Host": "liverreview.example.com:12439",
+        },
+    )
+    assert resp.status_code == 204
+
+
+def test_forwarded_host_takes_first_hop(client):
+    """X-Forwarded-Host 有多个取值时按第一个（最靠近客户端的一跳）判定。"""
+    resp = client.post(
+        "/api/auth/logout",
+        headers={
+            "Origin": "http://liverreview.example.com:12439",
+            "Host": "backend:12439",
+            "X-Forwarded-Host": "liverreview.example.com:12439, inner-gateway",
+        },
+    )
+    assert resp.status_code == 204
+
+
+def test_foreign_origin_with_same_hostname_different_port_is_rejected(client):
+    """主机名相同但端口不同仍是跨站，端口必须一致。"""
+    resp = client.post(
+        "/api/auth/logout",
+        headers={"Origin": "http://testserver:9999", "Host": "testserver:12439"},
+    )
+    assert resp.status_code == 403

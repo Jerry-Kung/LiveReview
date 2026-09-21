@@ -225,3 +225,5 @@ backend/media/
 
 # 本地测试素材（GB 级录屏，不入库）
 videos/
+
+admin.txt

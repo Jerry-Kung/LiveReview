@@ -10,6 +10,8 @@
    Cookie 是浏览器自动携带的凭证，`SameSite=Lax` 已能挡住跨站的表单与 fetch，
    但同站子域或放宽策略时仍会被利用，因此对写操作再加一条同源检查。
    没有 `Origin` 的请求放行——那是非浏览器客户端（curl、脚本）发出的，它们本就不带 Cookie。
+   反向代理会改写 `Host`（`$host` 不含端口），因此同时比对 `X-Forwarded-Host`，
+   否则经 nginx 进来的正常写请求会被判成跨站。
 
 会话查证每次请求都要读一次库（V0.5 的签名票据不需要），这是把会话收进数据库的代价，
 换来的是「能单独撤销一张会话」。SQLite 上的主键查询在这个量级不构成瓶颈。
@@ -69,20 +71,73 @@ class CurrentUser:
     role: str
 
 
+def _request_hosts(request: Request) -> list[str]:
+    """本请求可能被访问到的 Host，按可信度排列。
+
+    取 `Host` 之外还要取 `X-Forwarded-Host`：反向代理常见的写法是
+    `proxy_set_header Host $host`，`$host` 不含端口，于是浏览器发来的
+    `Origin: http://<主机>:<端口>` 与后端看到的 `Host: <主机>` 对不上，正常登录会被
+    判成跨站。这两种取值都只在「同一部署的前端与后端」之间出现，逐条比对不会放宽判定。
+    """
+    values: list[str] = []
+    for header in ("host", "x-forwarded-host"):
+        raw = request.headers.get(header)
+        if not raw:
+            continue
+        # 逐跳代理会在 X-Forwarded-Host 里追加，取第一个（最靠近客户端的那一跳）
+        values.extend(part.strip() for part in raw.split(",") if part.strip())
+    return values
+
+
+def _hostname_port(netloc: str) -> tuple[str, str] | None:
+    """把 `主机:端口` 拆成 (主机, 端口)；端口缺省时返回空串。
+
+    不用 `parsed.port`：那是整数，`http://x` 与 `http://x:80` 都会得到 80，等于把
+    「没写端口」与「显式写了默认端口」混为一谈，而这正是要区分的地方。
+    """
+    if not netloc:
+        return None
+    hostname, _, port = netloc.rpartition(":")
+    if not hostname:  # 没有冒号，全是主机名
+        return netloc.lower(), ""
+    return hostname.lower(), port
+
+
+def _host_matches(candidate_netloc: str, origin_host: tuple[str, str]) -> bool:
+    """本请求的一个 Host 取值是否算作与该 Origin 同源。
+
+    主机名必须一致；端口只有在本请求的 Host 里写了才比对——`Host` 不带端口说明请求
+    正是从这个地址的默认端口进来的（反向代理的 `$host` 就是这样），端口这一段无从比较，
+    按同源处理。nginx 已改为转发 `$http_host` 保留端口，这里是它之外的一道兜底：
+    外层还有别的网关、或它也吃掉了端口时，正常登录不至于被判成跨站。
+    """
+    candidate = _hostname_port(candidate_netloc)
+    if candidate is None:
+        return False
+    hostname, port = candidate
+    if hostname != origin_host[0]:
+        return False
+    return port == "" or port == origin_host[1]
+
+
 def _is_same_origin(request: Request) -> bool:
     """请求的 Origin 是否与本请求的 Host 同源。
 
-    Origin 缺失即放行（见模块说明）。比对时忽略端口以外的差异，协议与主域都必须一致：
-    `http` 与 `https` 视为不同源，避免在降级场景下被绕过。
+    Origin 缺失即放行（见模块说明）。协议不参与比对——`Origin` 里的协议由浏览器按页面
+    实际协议给出，后端经反向代理后看到的请求协议无法可靠对应；主机名必须一致，端口按
+    `_host_matches` 的规则处理。
     """
     origin = request.headers.get("origin")
     if not origin:
         return True
     parsed = urlsplit(origin)
-    host = request.headers.get("host")
-    if not host or not parsed.netloc:
+    candidates = _request_hosts(request)
+    if not candidates or not parsed.netloc:
         return False
-    return parsed.netloc.lower() == host.lower()
+    origin_host = _hostname_port(parsed.netloc)
+    if origin_host is None:
+        return False
+    return any(_host_matches(candidate, origin_host) for candidate in candidates)
 
 
 def origin_allowed(request: Request) -> bool:
