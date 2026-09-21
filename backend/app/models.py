@@ -67,9 +67,16 @@ TERMINAL_REVIEW_STATUSES: frozenset[str] = frozenset(
 )
 
 
-# 账号角色（V0.5.1）：本版只有管理员一种，所有登录用户等价。这个列先落在库里，
-# 让后续加只读账号时只需补判定，不必再动表结构。
+# 账号角色（V0.5.1 起）。两种取值，来源不同：
+#
+# - `ROLE_ADMIN`：由 `python -m app.auth.init_admin` 创建，能进「账号管理」，建号与删号
+#   都只对它开放。脚本之外没有第二条提权路径——界面新建的账号一律是 `ROLE_MEMBER`。
+# - `ROLE_MEMBER`：界面上的「账号管理」新建出来的普通账号，除账号管理外的功能与管理员等价。
+#
+# 本版没有第三种角色，也没有细粒度权限：判定只发生在「能不能管账号」这一件事上，界面上
+# 的可见性随之收敛（`require_admin` 见 `app/auth/__init__.py`）。
 ROLE_ADMIN = "admin"
+ROLE_MEMBER = "member"
 
 
 class User(Base):

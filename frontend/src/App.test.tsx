@@ -8,7 +8,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { SESSION } from "./test/fixtures";
+import { MEMBER_SESSION, SESSION } from "./test/fixtures";
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -18,8 +18,8 @@ function jsonResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
-/** 只覆盖登录门槛相关的请求：会话查询、登录、任务列表。 */
-function mockApi(options: { session?: Response } = {}) {
+/** 只覆盖登录门槛相关的请求：会话查询、登录、任务列表、账号列表。 */
+function mockApi(options: { session?: Response; accounts?: Response } = {}) {
   const calls: string[] = [];
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -28,6 +28,7 @@ function mockApi(options: { session?: Response } = {}) {
     if (url === "/api/auth/login") return jsonResponse(200, SESSION);
     if (url === "/api/auth/logout") return jsonResponse(204, null);
     if (url.startsWith("/api/tasks?")) return jsonResponse(200, { items: [] });
+    if (url === "/api/accounts") return options.accounts ?? jsonResponse(200, { items: [] });
     throw new Error(`未覆盖的请求：${url}`);
   }) as unknown as typeof fetch;
   return calls;
@@ -132,6 +133,44 @@ describe("登录门槛", () => {
       await screen.findByText("登录状态已失效，请重新登录。"),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("选择录屏文件")).not.toBeInTheDocument();
+  });
+
+  it("管理员账号在侧栏看到「账号管理」，普通账号看不到", async () => {
+    // 入口的可见性按角色收敛。这不是安全边界（后端对非管理员一律 403），
+    // 但把入口露给没有权限的人只会让他点进去撞一堵墙
+    // 先装好 mock 再 render：反过来的话首次会话查询会落回空桩，直接停在登录页
+    mockApi({ session: jsonResponse(200, SESSION) });
+    const { unmount } = render(<App />);
+    expect(await screen.findByRole("button", { name: "账号管理" })).toBeInTheDocument();
+    unmount();
+
+    mockApi({ session: jsonResponse(200, MEMBER_SESSION) });
+    render(<App />);
+    // 先等普通账号的工作台渲染出来，否则断言可能在载入态就通过
+    expect(await screen.findByLabelText("选择录屏文件")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "账号管理" })).not.toBeInTheDocument();
+  });
+
+  it("普通账号手敲 #/accounts 看到权限说明，而不是账号列表", async () => {
+    // 直接改 hash 是绕过侧栏可见性的方式，这里要确认它拿不到管理界面。
+    // 真正的边界在后端：账号接口对普通账号返回 403（见后端 tests/auth/test_accounts.py）
+    const calls = mockApi({ session: jsonResponse(200, MEMBER_SESSION) });
+    window.location.hash = "#/accounts";
+    render(<App />);
+
+    expect(await screen.findByText(/只对管理员账号开放/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "创建账号" })).not.toBeInTheDocument();
+    // 连列表都不该去请求：注定 403 的请求发出去只会在界面上堆一条错误
+    expect(calls.some((call) => call.includes("/api/accounts"))).toBe(false);
+  });
+
+  it("管理员进入 #/accounts 时渲染账号管理界面", async () => {
+    const calls = mockApi({ session: jsonResponse(200, SESSION) });
+    window.location.hash = "#/accounts";
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "创建账号" })).toBeInTheDocument();
+    expect(calls.some((call) => call === "GET /api/accounts")).toBe(true);
   });
 
   it("首次进入的载入态不显示登录页，避免闪一下再跳进工作台", async () => {

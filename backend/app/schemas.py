@@ -305,16 +305,53 @@ class LoginRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
-    """当前登录者。`display_name` 只用于界面称呼，不参与鉴权。"""
+    """当前登录者。`display_name` 只用于界面称呼，不参与鉴权。
+
+    `role` 是前端判断「要不要显示账号管理入口」的唯一依据（V0.5.2）。它只决定界面的
+    可见性，真正的判定在后端；把角色藏起来只会让前端无从渲染，而不是更安全。
+    """
 
     username: str
     display_name: str
+    role: str
 
 
 class SessionResponse(BaseModel):
     """登录态：登录与「查询当前身份」共用同一份结构。"""
 
     user: UserResponse
+
+
+class AccountCreateRequest(BaseModel):
+    """新建账号的请求体。
+
+    刻意**不含 `role`**：账号的角色由服务端写死为 `member`（见 `app/routers/accounts.py`）。
+    请求体里留一个角色字段等于把提权路径开在接口上——界面只提供建普通账号，接口就不
+    该接受更大的权力。要造第二个管理员仍走 `init_admin` 脚本。
+
+    长度下限不在这里约束：pydantic 的 `min_length` 会返回 422 加一段英文提示，而本项目
+    的中文 `detail` 是直接展示给使用者的文案。下限改在路由里判定，口径与脚本一致。
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+    display_name: str = Field(default="", max_length=64)
+
+
+class AccountResponse(BaseModel):
+    """账号清单里的一行。不含 `password_hash`——哈希不出现在任何响应体里。"""
+
+    id: int
+    username: str
+    display_name: str
+    role: str
+    created_at: datetime
+    # 从未登录过即为空：界面据此区分「建了没用」与「正在使用」
+    last_login_at: datetime | None
+
+
+class AccountListResponse(BaseModel):
+    items: list[AccountResponse]
 
 
 class StatusResponse(BaseModel):

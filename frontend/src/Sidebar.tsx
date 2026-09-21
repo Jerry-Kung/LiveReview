@@ -8,13 +8,16 @@
  * 「数据分析」「设置」是导航结构上的预留入口，本版没有对应后端能力，点击不跳转，并用
  * 「未接入」明确说明——不做空白页伪装成功能，也不把它们藏起来让导航只剩一项。
  *
+ * 「账号管理」（V0.5.2）已接入，但只对管理员显示：这是导航层面的可见性收敛，不是权限
+ * 本身——后端那一组接口对非管理员一律 403，普通账号手敲 `#/accounts` 也只会看到说明页。
+ *
  * 任务状态用小圆点 + 文字表达（见 `.status`），不用彩色 Badge：状态是辅助信息，
  * 不该抢页面的主视觉。
  */
 
 import type { Task } from "./api";
 import { PLACEHOLDER, taskStatusLabel, taskStatusTone } from "./format";
-import { IconChart, IconList, IconSettings } from "./icons";
+import { IconChart, IconList, IconSettings, IconUsers } from "./icons";
 import type { NavKey } from "./routing";
 
 /** 侧栏筛选：文件名是用户手里唯一认得出的标识，因此只按文件名匹配。 */
@@ -31,6 +34,7 @@ export default function Sidebar({
   activeTaskId,
   activeNav,
   query,
+  isAdmin,
   onOpenTask,
   onSelectNav,
 }: {
@@ -41,6 +45,8 @@ export default function Sidebar({
   activeTaskId: string | null;
   /** 当前主导航项 */
   activeNav: NavKey;
+  /** 是否管理员：决定「账号管理」是否出现在导航里 */
+  isAdmin: boolean;
   /** 页眉搜索框的筛选词 */
   query: string;
   onOpenTask: (taskId: string) => void;
@@ -70,6 +76,17 @@ export default function Sidebar({
           数据分析
           <span className="rail-item-tag">未接入</span>
         </button>
+        {isAdmin && (
+          <button
+            type="button"
+            className="rail-item"
+            aria-current={activeNav === "accounts" ? "page" : undefined}
+            onClick={() => onSelectNav("accounts")}
+          >
+            <IconUsers />
+            账号管理
+          </button>
+        )}
         <button
           type="button"
           className="rail-item"

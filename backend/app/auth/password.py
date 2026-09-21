@@ -22,6 +22,11 @@ DEFAULT_ITERATIONS = 240_000
 SALT_BYTES = 16
 ALGORITHM = "pbkdf2_sha256"
 
+# 口令长度下限。建号有两条路径——初始化脚本（`app/auth/init_admin.py`）与登录后的
+# 「账号管理」界面（`app/routers/accounts.py`）——两边必须是同一条策略。写在这里而不是
+# 各写一份：两处一旦分叉，就会出现「命令行拦下的口令界面照收」这种前后不一致。
+MIN_PASSWORD_LENGTH = 8
+
 
 def hash_password(password: str, *, iterations: int = DEFAULT_ITERATIONS) -> str:
     """生成一份可写入 `users.password_hash` 的哈希串。"""

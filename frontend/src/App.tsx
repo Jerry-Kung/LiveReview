@@ -5,17 +5,22 @@
  * 遮掩——工作台里的每个请求都要带会话 Cookie，后端会把未登录的请求一并拒掉，因此
  * 这里省掉的是一串注定失败的请求，而不是一次安全检查。真正的边界在后端。
  *
- * 主区按 hash 路由显示三种内容：新建任务页、从最近任务里打开的一条既有任务、以及两个
- * 预留功能页（数据分析 / 设置，本版没有后端能力，只给出说明页）。本业务链路始终是
+ * 主区按 hash 路由显示：新建任务页、从最近任务里打开的一条既有任务、账号管理页，以及
+ * 两个预留功能页（数据分析 / 设置，本版没有后端能力，只给出说明页）。本业务链路始终是
  * 「上传 → 处理 → 结果」，路由只负责决定当前看哪一屏。
+ *
+ * 账号管理（V0.5.2）是唯一一处按角色决定可见性的地方。这里只是**界面收敛**：非管理员
+ * 既看不到侧栏入口，手敲 `#/accounts` 也只会看到说明页；真正的边界在后端，那一组接口对
+ * 非管理员一律 403，绕过界面直接调接口拿不到任何东西。
  */
 
 import { useCallback, useEffect, useState } from "react";
+import AccountsPage from "./AccountsPage";
 import Header from "./Header";
 import LoginPage from "./LoginPage";
 import Sidebar from "./Sidebar";
 import Workbench from "./Workbench";
-import { IconChart, IconSettings } from "./icons";
+import { IconChart, IconSettings, IconUsers } from "./icons";
 import { DEFAULT_SECTION, useRoute, type TaskSection } from "./routing";
 import { login } from "./session";
 import { useSession } from "./session";
@@ -69,6 +74,8 @@ export default function App() {
   }, []);
 
   const authenticated = session.status === "authenticated";
+  // 角色只在已登录时才有值，未登录的会话对象上没有 user
+  const isAdmin = session.status === "authenticated" && session.user.role === "admin";
 
   useEffect(() => {
     // 只在已登录后取任务列表：未登录时这个请求必然 401，还会把「会话失效」的提示
@@ -147,8 +154,13 @@ export default function App() {
           loading={historyLoading}
           error={historyError}
           activeTaskId={route.view === "task" ? route.taskId : null}
-          activeNav={route.view === "analytics" || route.view === "settings" ? route.view : "tasks"}
+          activeNav={
+            route.view === "analytics" || route.view === "settings" || route.view === "accounts"
+              ? route.view
+              : "tasks"
+          }
           query={query}
+          isAdmin={isAdmin}
           onOpenTask={openTask}
           onSelectNav={(key) => {
             if (key === "tasks") {
@@ -167,6 +179,17 @@ export default function App() {
               icon={<IconChart size={20} />}
             />
           )}
+
+          {route.view === "accounts" &&
+            (isAdmin ? (
+              <AccountsPage />
+            ) : (
+              <PlaceholderPage
+                title="账号管理"
+                note="这个模块只对管理员账号开放。你的账号可以使用上传、处理与复盘等全部功能，账号的增删请联系管理员。"
+                icon={<IconUsers size={20} />}
+              />
+            ))}
 
           {route.view === "settings" && (
             <PlaceholderPage

@@ -53,6 +53,16 @@ export function IconSettings({ size = 18, className }: IconProps) {
   );
 }
 
+export function IconUsers({ size = 18, className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className} aria-hidden="true" {...BOX}>
+      <circle cx="9.5" cy="8.5" r="3" />
+      <path d="M4 19.5c0-2.8 2.5-4.5 5.5-4.5s5.5 1.7 5.5 4.5" />
+      <path d="M16 6.2a3 3 0 0 1 0 5.6M17.5 15.4c1.8.5 3 1.8 3 4.1" />
+    </svg>
+  );
+}
+
 // ── 动作 ─────────────────────────────────────────────────────────────────
 
 export function IconPlus({ size = 18, className }: IconProps) {

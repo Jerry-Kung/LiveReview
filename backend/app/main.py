@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 
 from app import tasks
-from app.auth import require_trusted_origin, require_user
+from app.auth import require_admin, require_trusted_origin, require_user
 from app.config import get_settings
 from app.database import init_db
+from app.routers import accounts
 from app.routers import auth as auth_router
 from app.routers import health, tasks as tasks_router
 from app.routers import review
@@ -70,3 +71,8 @@ app.include_router(tasks_router.router, dependencies=auth_required)
 # 先注册，避免被更宽泛的同级路由抢先匹配
 app.include_router(understanding.router, dependencies=auth_required)
 app.include_router(review.router, dependencies=auth_required)
+
+# 账号管理（V0.5.2）整组要求管理员：依赖放在 `require_admin` 里，它自己依赖 `require_user`，
+# 因此这里**不再叠加** auth_required——重复挂载不会多查库（依赖按调用者缓存），但会让人
+# 误以为这组端点的登录要求与别处不同。
+app.include_router(accounts.router, dependencies=[Depends(require_admin)])

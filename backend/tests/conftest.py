@@ -25,6 +25,11 @@ FILE_SIZE = 3 * CHUNK_SIZE  # 3 片，便于构造缺片与乱序场景
 TEST_USERNAME = "tester"
 TEST_PASSWORD = "test-password-1"
 TEST_DISPLAY_NAME = "测试用户"
+# 普通账号（V0.5.2）：与管理员功能等价，只少了账号管理。用于验证「已登录但没权限」
+# 这条路径与「未登录」区分得开（403 与 401 是两回事）
+MEMBER_USERNAME = "member"
+MEMBER_PASSWORD = "member-password-1"
+MEMBER_DISPLAY_NAME = "普通用户"
 # 哈希迭代次数压到最小：真实取值是 24 万次，测试里每条用例都跑一遍只会拖慢套件
 TEST_HASH_ITERATIONS = 1_000
 
@@ -163,11 +168,31 @@ def test_user(db_session_factory):
 
 
 @pytest.fixture
-def client(db_session_factory, test_settings: Settings, storage, test_user, monkeypatch) -> TestClient:
-    """装配测试客户端：库、存储与后台执行器全部替换为可控实现。
+def member_user(db_session_factory):
+    """一个 `member` 角色的账号：界面新建出来的账号就是这个角色。"""
+    from app.auth import store
+    from app.models import ROLE_MEMBER
 
-    V0.5 起业务接口要求登录，这里在装配完成后自动登录一次，使既有链路的测试不必
-    各自重复登录动作；验证「未登录会被拦住」的用例请用 `anonymous_client`。
+    db = db_session_factory()
+    try:
+        return store.create_user(
+            db,
+            username=MEMBER_USERNAME,
+            password=MEMBER_PASSWORD,
+            display_name=MEMBER_DISPLAY_NAME,
+            role=ROLE_MEMBER,
+        )
+    finally:
+        db.close()
+
+
+def _assemble_app(db_session_factory, test_settings: Settings, storage, monkeypatch):
+    """把应用装配成一份可控实现：库、存储与后台执行器全部替换掉。
+
+    抽成函数是因为 V0.5.2 起需要**两个互不干扰的客户端**（管理员与普通账号各持一张会话
+    Cookie）。TestClient 自带一个 Cookie 罐，两个身份共用一个实例时，后登录的那个会把
+    先登录的挤掉——表现为「同时在用两个身份」的用例里，管理员那一侧莫名其妙变成 403。
+    因此每个身份各建一个 TestClient，指向同一个应用与同一份替换。
     """
     from app.main import app
     from app import uploads as uploads_module
@@ -210,6 +235,18 @@ def client(db_session_factory, test_settings: Settings, storage, test_user, monk
     monkeypatch.setattr("app.tasks.review.get_review_client", lambda: FakeReviewClient())
     # 节流按账号在进程内存里计数，用例之间必须隔离，否则前一条用例的失败次数会累积
     monkeypatch.setattr("app.auth.service._throttle", LoginThrottle())
+    return app
+
+
+@pytest.fixture
+def client(db_session_factory, test_settings: Settings, storage, test_user, monkeypatch) -> TestClient:
+    """装配测试客户端：库、存储与后台执行器全部替换为可控实现。
+
+    V0.5 起业务接口要求登录，这里在装配完成后自动登录一次，使既有链路的测试不必
+    各自重复登录动作；验证「未登录会被拦住」的用例请用 `anonymous_client`。
+    这个客户端是**管理员**身份。
+    """
+    app = _assemble_app(db_session_factory, test_settings, storage, monkeypatch)
 
     with TestClient(app) as test_client:
         login(test_client)
@@ -239,6 +276,22 @@ def use_settings(monkeypatch, test_settings: Settings):
         return updated
 
     return apply
+
+
+@pytest.fixture
+def member_client(
+    client: TestClient, member_user, db_session_factory, test_settings: Settings, storage, monkeypatch
+) -> TestClient:
+    """已登录的普通账号客户端：能过登录这一关，但过不了管理员那一关。
+
+    依赖 `client` 只是为了复用同一份已装配的应用（并且保证测试库与存储实例是同一个），
+    客户端本身是**另建的一个 TestClient**：两个身份各持一张会话 Cookie，共用一个实例
+    会让后登录的挤掉先登录的，同一条用例里就没法同时用两个身份了。
+    """
+    app = client.app
+    with TestClient(app) as member_test_client:
+        login(member_test_client, MEMBER_USERNAME, MEMBER_PASSWORD)
+        yield member_test_client
 
 
 @pytest.fixture

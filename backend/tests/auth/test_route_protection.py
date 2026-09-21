@@ -28,6 +28,11 @@ PROTECTED_ENDPOINTS: list[tuple[str, str]] = [
     ("GET", "/api/tasks/unknown-id/review.md"),
     # 运行配置状态原先挂在公开的健康检查上，V0.5 起移到这里，同样要求登录
     ("GET", "/api/auth/status"),
+    # 账号管理（V0.5.2）：未登录同样要 401。「已登录但不是管理员」是另一件事，
+    # 归 403，那一组在 test_accounts.py 里
+    ("GET", "/api/accounts"),
+    ("POST", "/api/accounts"),
+    ("DELETE", "/api/accounts/999999"),
 ]
 
 

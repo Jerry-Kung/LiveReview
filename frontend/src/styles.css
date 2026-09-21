@@ -1721,7 +1721,7 @@ dd {
   border-radius: var(--r2);
 }
 
-/* ── 表单字段：登录页使用；工作台里的参数编辑尚未接入 ─────────────── */
+/* ── 表单字段：登录页与账号管理页使用；工作台里的参数编辑尚未接入 ─────── */
 
 .field {
   display: flex;
@@ -1754,6 +1754,22 @@ dd {
 .field-notice {
   font-size: var(--fs-note);
   color: var(--error);
+}
+
+/* 账号管理的新增表单：三个字段并排，窄屏折行。
+   与登录页的竖排表单不同——那里只有两个字段且是进入系统的门，这里是一张并排的录入行。 */
+.account-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s4);
+  align-items: end;
+}
+
+/* 提交按钮与提示语横跨整行，不参与上面的等分列 */
+.account-form .actions,
+.account-form .hint,
+.account-form .field-notice {
+  grid-column: 1 / -1;
 }
 
 /* ── 登录页与启动态 ─────────────────────────────────────────────────── */

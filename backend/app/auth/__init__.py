@@ -15,6 +15,9 @@
 
 会话查证每次请求都要读一次库（V0.5 的签名票据不需要），这是把会话收进数据库的代价，
 换来的是「能单独撤销一张会话」。SQLite 上的主键查询在这个量级不构成瓶颈。
+
+V0.5.2 在这两道防线之上加了第三层：`require_admin`。它只区分「能不能管账号」，
+不构成通用权限体系——本版除账号管理外的功能对所有登录账号一视同仁。
 """
 
 from __future__ import annotations
@@ -23,10 +26,11 @@ import logging
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from fastapi import HTTPException, Request, Response, status
+from fastapi import Depends, HTTPException, Request, Response, status
 
 from app.auth import session as session_cookie
 from app.auth import store
+from app.models import ROLE_ADMIN
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +198,24 @@ def require_user(request: Request) -> CurrentUser:
         )
     finally:
         db.close()
+
+
+def require_admin(current: CurrentUser = Depends(require_user)) -> CurrentUser:
+    """路由依赖：在「已登录」之上再要求管理员角色（V0.5.2）。
+
+    写成 `require_user` 的子依赖而不是自己再解析一次 Cookie：FastAPI 会缓存同一请求内
+    的依赖结果，因此同源校验与会话查库在一次请求里仍然只做一遍，handler 里无论写
+    `Depends(require_user)` 还是 `Depends(require_admin)` 都不会多查一次库。
+
+    403 而不是 401：调用者是**已登录**的合法用户，只是这件事不对他开放。回 401 会让
+    前端把它当成「会话失效」而把人弹回登录页，而他重新登录后依然没有权限。
+    """
+    if current.role != ROLE_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有管理员账号可以执行此操作",
+        )
+    return current
 
 
 def set_session_cookie(response: Response, settings, token: str) -> None:

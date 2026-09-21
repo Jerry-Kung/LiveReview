@@ -33,11 +33,11 @@ import sys
 from sqlalchemy.exc import IntegrityError
 
 from app.auth import store
+# 口令长度下限与哈希参数同源：界面上建号走的是同一条策略，两处不能各写一份
+from app.auth.password import MIN_PASSWORD_LENGTH
 from app.models import ROLE_ADMIN
 
 DEFAULT_USERNAME = "admin"
-# 账号与显示名都不允许出现的字符：账号要能当用户名敲，显示名要能进 Cookie 之外的界面
-MIN_PASSWORD_LENGTH = 8
 
 
 class PromptAborted(Exception):

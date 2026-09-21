@@ -11,6 +11,7 @@
  * | #/tasks/:id/media           | 任务结果 · 视频信息 |
  * | #/tasks/:id/understanding   | 任务结果 · 内容理解 |
  * | #/tasks/:id/review          | 任务结果 · 复盘分析 |
+ * | #/accounts                   | 账号管理（仅管理员可见） |
  *
  * V0.4.1 把任务结果页拆成三个子页，子页也写进 hash：刷新与前进/后退要在子页之间也成立，
  * 否则「打开时落在复盘结论、刷新后又回到顶部」这种跳变会一直存在。
@@ -20,8 +21,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-/** 侧栏主导航的三项；数据分析与设置为预留入口，本版没有对应后端能力。 */
-export type NavKey = "tasks" | "analytics" | "settings";
+/**
+ * 侧栏主导航；数据分析与设置为预留入口，本版没有对应后端能力。
+ *
+ * `accounts`（V0.5.2）已接入，但只对管理员渲染——它到底显不显示由 `App` 按会话里的
+ * 角色决定，路由这一层不掺和权限判断，只负责「这个 hash 对应哪一屏」。
+ */
+export type NavKey = "tasks" | "analytics" | "settings" | "accounts";
 
 /** 任务结果页的三个子页。取值即 hash 里的那一段，两者保持一致便于对照。 */
 export type TaskSection = "media" | "understanding" | "review";
@@ -69,6 +75,7 @@ function parse(hash: string): Route {
   }
   if (hash === "#/analytics") return { view: "analytics", taskId: null };
   if (hash === "#/settings") return { view: "settings", taskId: null };
+  if (hash === "#/accounts") return { view: "accounts", taskId: null };
   return { view: "new", taskId: null };
 }
 
@@ -81,6 +88,7 @@ function hrefOf(route: Route): string {
   }
   if (route.view === "analytics") return "#/analytics";
   if (route.view === "settings") return "#/settings";
+  if (route.view === "accounts") return "#/accounts";
   return "#/new";
 }
 

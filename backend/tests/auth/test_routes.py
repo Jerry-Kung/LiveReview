@@ -125,7 +125,12 @@ def test_session_is_independent_of_the_browser_cookie_jar(client):
 def test_session_returns_current_user(client):
     resp = client.get("/api/auth/session")
     assert resp.status_code == 200
-    assert resp.json()["user"] == {"username": TEST_USERNAME, "display_name": TEST_DISPLAY_NAME}
+    # 角色一并返回：前端据此决定要不要渲染账号管理入口（V0.5.2）
+    assert resp.json()["user"] == {
+        "username": TEST_USERNAME,
+        "display_name": TEST_DISPLAY_NAME,
+        "role": "admin",
+    }
 
 
 def test_session_requires_login(anonymous_client):
@@ -282,7 +287,7 @@ def test_status_requires_login(anonymous_client):
 
 def test_status_reports_configuration_without_secrets(client):
     data = client.get("/api/auth/status").json()
-    assert data["version"] == "0.5.1"
+    assert data["version"] == "0.5.2"
     assert data["database"] == "ok"
     assert data["storage"] in ("configured", "not_configured", "unavailable")
     assert data["llm"] in ("configured", "not_configured")

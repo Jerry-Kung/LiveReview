@@ -366,6 +366,46 @@ export function reviewDownloadUrl(taskId: string): string {
 }
 
 /** 按后端下发的分片大小切分文件；末片自动不足一整片。 */
+/**
+ * 账号管理（V0.5.2）：只有管理员账号调得动，普通账号会拿到 403。
+ *
+ * 这三个走通用的 `request<T>()` 而不是像 `session.ts` 那样自己 fetch：它们都是登录后的
+ * 普通数据请求，401 应当照常触发「会话失效」回到登录页，403 则应把后端的中文 `detail`
+ * 显示出来。
+ */
+
+export type Account = {
+  id: number;
+  username: string;
+  display_name: string;
+  /** `admin` 或 `member`；管理员账号不可删除 */
+  role: string;
+  created_at: string;
+  /** 从未登录过即为 null */
+  last_login_at: string | null;
+};
+
+export function fetchAccounts(): Promise<{ items: Account[] }> {
+  return request<{ items: Account[] }>("/api/accounts");
+}
+
+export function createAccount(
+  username: string,
+  password: string,
+  displayName: string,
+): Promise<Account> {
+  return request<Account>("/api/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // 不含角色：服务端一律建成普通账号，界面没有提权入口
+    body: JSON.stringify({ username, password, display_name: displayName }),
+  });
+}
+
+export function deleteAccount(accountId: number): Promise<void> {
+  return request<void>(`/api/accounts/${accountId}`, { method: "DELETE" });
+}
+
 export function sliceFile(file: File, chunkSize: number): Blob[] {
   const parts: Blob[] = [];
   for (let offset = 0; offset < file.size; offset += chunkSize) {

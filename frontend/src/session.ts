@@ -17,6 +17,13 @@ export type SessionUser = {
   username: string;
   /** 界面上的称呼 */
   display_name: string;
+  /**
+   * 账号角色（V0.5.2）：`admin` 或 `member`。
+   *
+   * 界面拿它决定要不要显示「账号管理」入口。这只是可见性，不是安全边界——后端对每个
+   * 管理接口都单独判角色，绕过界面直接敲 hash 或调接口一样会被拦。
+   */
+  role: string;
 };
 
 export type SessionState =

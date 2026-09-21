@@ -95,7 +95,12 @@ def login(
     set_session_cookie(response, settings, issued.token)
     logger.info("登录成功：账号=%s", result.user.username)
     return SessionResponse(
-        user=UserResponse(username=result.user.username, display_name=result.user.display_name)
+        user=UserResponse(
+            username=result.user.username,
+            display_name=result.user.display_name,
+            # 角色随登录响应一起给出：前端据此决定要不要渲染账号管理入口
+            role=result.user.role,
+        )
     )
 
 
@@ -125,7 +130,11 @@ def logout(
 def read_session(current: CurrentUser = Depends(require_user)) -> SessionResponse:
     """当前登录身份：前端启动时用它判断该显示登录页还是工作台。"""
     return SessionResponse(
-        user=UserResponse(username=current.username, display_name=current.display_name)
+        user=UserResponse(
+            username=current.username,
+            display_name=current.display_name,
+            role=current.role,
+        )
     )
 
 
