@@ -20,7 +20,7 @@ import { formatBytes } from "./format";
  * 自动完成，用户既看不到也影响不了，摆在这里只会占掉首屏最显眼的一栏。
  */
 const GUIDE_STEPS = [
-  { title: "上传录屏", note: "支持 MP4 / TS，单个文件最大 2 GB" },
+  { title: "上传录屏", note: "支持 MP4 / TS，建议单个文件不超过 2 GB，更大的文件处理时间会明显变长" },
   { title: "等待视频处理", note: "系统自动解析与切片，完成后进入任务详情" },
   { title: "开始内容识别", note: "在「内容理解」页点「开始识别语音」" },
   { title: "开始复盘分析", note: "在「复盘分析」页点「开始复盘分析」" },
@@ -128,7 +128,7 @@ export default function IntakePage({
               ? "本次上传没有提交成功。已传完的分片会留在服务端，重新选择同一个文件可继续补齐。"
               : resuming
                 ? "已传的分片留在服务端，重新选择同一个文件只会补传缺的部分，不会从头再传一遍。"
-                : "支持 MP4、TS 格式，单个文件最大 2 GB。上传完成后将自动进行视频处理与分析。"}
+                : "支持 MP4、TS 格式，建议单个文件不超过 2 GB。更大的文件同样可以处理，只是上传与处理耗时会更长，上传完成后将自动进行视频处理与分析。"}
           </p>
 
           {/* 文件输入常驻：进度阶段不能换文件，等待与空闲阶段可以。
@@ -167,7 +167,7 @@ export default function IntakePage({
                 </>
               )}
             </span>
-            <span className="dropzone-note">MP4 / TS · 最大 2 GB</span>
+            <span className="dropzone-note">MP4 / TS · 建议 2 GB 以内</span>
             <span className="btn btn--primary dropzone-action" aria-hidden="true">
               {resuming ? "选择同一个文件" : "选择文件"}
             </span>
