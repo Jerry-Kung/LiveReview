@@ -243,9 +243,12 @@ export default function ReviewBlock({
   const understood = (understanding?.clip_count ?? 0) > 0;
   const running = review?.status === "running" || actions.reviewing;
 
-  // 复盘在后台跑：处于复盘中就按节奏轮询，直到拿到终态
+  // 复盘在后台跑：处于复盘中就按节奏轮询，直到拿到终态。
+  // 守卫用 `running` 而不是 `review?.status`：`running` 含 `actions.reviewing`，
+  // 因此点下按钮的那一刻轮询就启动了——否则「复盘中…」已经显示、轮询却没跑，
+  // 进度会悬在 0 直到用户自己刷新（V0.6.2）。
   useEffect(() => {
-    if (review?.status !== "running") return;
+    if (!running) return;
     let cancelled = false;
     const timer = window.setInterval(() => {
       void fetchTask(task.id)
@@ -259,7 +262,7 @@ export default function ReviewBlock({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [review?.status, task.id, onTask]);
+  }, [running, task.id, onTask]);
 
   const blocked = !hasClips ? "还没有切片，请先完成切分" : !understood ? "还没有识别结果，请先完成识别" : null;
 
@@ -293,7 +296,9 @@ export default function ReviewBlock({
         </button>
         {running && review && (
           <span className="hint">
-            复盘进度 {review.progress}%，可以关闭页面，稍后回来看
+            {review.status === "pending"
+              ? "已提交，等待后台开始…"
+              : `复盘进度 ${review.progress}%，可以关闭页面，稍后回来看`}
           </span>
         )}
         {blocked && <span className="hint">{blocked}</span>}

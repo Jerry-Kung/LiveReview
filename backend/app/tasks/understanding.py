@@ -38,6 +38,7 @@ from app.llm import (
     get_understanding_client,
 )
 from app.models import (
+    PROGRESS_UNDERSTANDING_START,
     MediaClip,
     Task,
     utcnow,
@@ -47,7 +48,8 @@ from app.storage import StorageError, describe_error as describe_storage_error, 
 logger = logging.getLogger(__name__)
 
 # 识别进度语义：认领 0 → 逐片推进 5~95 → 汇总完成 100。与切分进度分开，互不覆盖。
-PROGRESS_UNDERSTANDING_START = 5
+# 起点 `PROGRESS_UNDERSTANDING_START` 定义在 `app/models.py`：入队接口与本处的状态迁移
+# 是同一处取值（`Task.mark_understanding_running()`），常量随之落到模型层。
 PROGRESS_UNDERSTANDING_END = 95
 PROGRESS_UNDERSTANDING_DONE = 100
 
@@ -88,12 +90,7 @@ def run_understanding(
         _summarize(db, task, ready)
         return
 
-    task.understanding_status = UNDERSTANDING_STATUS_RUNNING
-    task.understanding_progress = PROGRESS_UNDERSTANDING_START
-    task.understanding_started_at = utcnow()
-    task.understanding_finished_at = None
-    task.understanding_error = None
-    task.updated_at = utcnow()
+    task.mark_understanding_running()
     db.commit()
 
     try:

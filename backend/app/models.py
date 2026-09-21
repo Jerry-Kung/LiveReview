@@ -66,6 +66,13 @@ TERMINAL_REVIEW_STATUSES: frozenset[str] = frozenset(
     {REVIEW_STATUS_SUCCEEDED, REVIEW_STATUS_FAILED}
 )
 
+# 两条链路的进度起点：认领后从「起点」开始推进，与切分链的 40~98 各占各的区间。
+# 定义在这里而不是各自的 `app/tasks/*.py`，是因为「入队即进入进行中」的取值由
+# `Task.mark_*_running()` 写入，常量若留在 tasks 侧就成了反向依赖（`app.tasks` 导入
+# `app.models`）。语义上它本来就属于状态取值，与上面几组 `*_STATUS_*` 同源。
+PROGRESS_UNDERSTANDING_START = 5
+PROGRESS_REVIEW_START = 10
+
 
 # 账号角色（V0.5.1 起）。两种取值，来源不同：
 #
@@ -290,6 +297,51 @@ class Task(Base):
     def video_expired(self) -> bool:
         """视频是否已过保留期被清理：区分「视频已删」与「从未上传成功」。"""
         return self.video_expired_at is not None
+
+    # 下面两个方法把「已入队、等待执行器接管」与「执行器正在跑」写成同一个可见状态。
+    # 入队接口只做了 `executor.submit()`，不等工作线程真正开始，所以「提交」与「接管」
+    # 之间必然有一段间隙；两处若各写一遍取值，迟早会漂移成两个不同的中间态，客户端在
+    # 那段间隙里读到的就是一个既非「未开始」也非「进行中」的第三态。取值只写在这里，
+    # 入队接口（`app/routers/`）与任务体（`app/tasks/`）都调用它。
+
+    def mark_understanding_running(self) -> None:
+        """整场识别进入「已入队 / 进行中」。"""
+        self.understanding_status = UNDERSTANDING_STATUS_RUNNING
+        self.understanding_progress = PROGRESS_UNDERSTANDING_START
+        self.understanding_started_at = utcnow()
+        self.understanding_finished_at = None
+        self.understanding_error = None
+        self.updated_at = utcnow()
+
+    def mark_review_running(self) -> None:
+        """整场复盘进入「已入队 / 进行中」。
+
+        计数类字段归零：`reset_*` 已清零，这里再写一次是为了让入队接口与任务体走上同一条
+        路径，而不依赖「调用方一定先 reset 过」这个约定。
+        """
+        self.review_status = REVIEW_STATUS_RUNNING
+        self.review_progress = PROGRESS_REVIEW_START
+        self.review_started_at = utcnow()
+        self.review_finished_at = None
+        self.review_error = None
+        self.review_segment_count = 0
+        self.review_clip_count = 0
+        self.review_batch_count = 0
+        self.updated_at = utcnow()
+
+    # 入队后失败时的终态：接口层与任务体的 `except` 共用，避免「已入队」在库里悬着。
+
+    def mark_understanding_failed(self, reason: str) -> None:
+        self.understanding_status = UNDERSTANDING_STATUS_FAILED
+        self.understanding_error = reason
+        self.understanding_finished_at = utcnow()
+        self.updated_at = utcnow()
+
+    def mark_review_failed(self, reason: str) -> None:
+        self.review_status = REVIEW_STATUS_FAILED
+        self.review_error = reason
+        self.review_finished_at = utcnow()
+        self.updated_at = utcnow()
 
     @property
     def has_review(self) -> bool:

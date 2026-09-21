@@ -46,6 +46,25 @@ def _require_model(settings: Settings) -> None:
         )
 
 
+def _submit_review(task_id: str, db: Session) -> None:
+    """把复盘交给后台执行器；执行器不可用时落成可重试的失败态，不留下假在途。
+
+    与识别侧同构：停在「进行中」的任务没有任何工作线程会推进它，而过期清理的「在途任务
+    跳过」只看状态列，那条视频于是永远不会被回收。
+    """
+    try:
+        submit(task_id, TASK_KIND_REVIEW)
+    except RuntimeError as exc:
+        task = db.get(Task, task_id)
+        if task is not None:
+            task.mark_review_failed(f"任务未能入队：{exc}")
+            db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="后台执行器不可用，复盘未入队，请稍后重试",
+        ) from exc
+
+
 @router.post(
     "/{task_id}/review",
     response_model=TaskResponse,
@@ -87,11 +106,15 @@ def start_review(
         )
 
     reset_task_review(db, task_id)
-    submit(task_id, TASK_KIND_REVIEW)
+    # 与识别侧同样的理由：`submit()` 不等工作线程开始，间隙里对外报 `pending` 会让界面
+    # 看起来与没点过一样（V0.6.2）。取值与任务体共用 `Task.mark_review_running()`。
+    task.mark_review_running()
+    db.commit()
+    _submit_review(task_id, db)
     logger.info("任务 %s 的复盘已入队", task_id)
 
     response.status_code = status.HTTP_202_ACCEPTED
-    return _to_response(_get_or_404(db, task_id), settings)
+    return _to_response(task, settings)
 
 
 @router.get("/{task_id}/review.md", response_class=Response)

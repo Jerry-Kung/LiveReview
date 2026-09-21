@@ -115,13 +115,24 @@ function describeError(err: unknown): { message: string; missing: number[] } {
 function useUnderstanding(
   task: Task | null,
   setTask: (task: Task) => void,
-  setError: (message: string | null) => void
+  setError: (message: string | null) => void,
+  onTaskChange: () => void
 ): UnderstandingActions & { refreshKey: number } {
   const [starting, setStarting] = useState(false);
   const [retryingIndex, setRetryingIndex] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  /**
+   * 已提交、但服务端还没进入进行中。
+   *
+   * 入队接口在后台线程接管前可能仍报 `pending`（见后端 `Task.mark_understanding_running`）。
+   * 此时若把 `starting` 收掉，界面会退回「开始识别语音」，看起来跟没点过一样；而 `pending`
+   * 又不能单独当在途判据——`reset_task_understanding` 会把进度、计数与起始时间一并清零，
+   * 「已入队」与「从未识别过」的响应字段完全相同，认了它会让没点过的任务一直显示
+   * 「识别中…」。因此这段空窗由这个本地标记顶着，等轮询拿到服务端状态再交还。
+   */
+  const [queued, setQueued] = useState(false);
   const taskId = task?.id ?? null;
-  const running = task?.understanding?.status === "running";
+  const running = task?.understanding?.status === "running" || starting || queued;
 
   // 识别在后台推进：处于识别中的任务按轮询节奏刷新，直到有终态结果
   useEffect(() => {
@@ -133,6 +144,8 @@ function useUnderstanding(
           if (cancelled) return;
           setTask(latest);
           setRefreshKey((prev) => prev + 1);
+          // 服务端已经表态（进行中或终态）：本地标记交还控制权
+          if (latest.understanding?.status !== "pending") setQueued(false);
         })
         // 轮询失败不打断：任务仍在后台跑，下个周期继续
         .catch(() => undefined);
@@ -148,14 +161,20 @@ function useUnderstanding(
     setStarting(true);
     setError(null);
     try {
-      setTask(await startUnderstanding(taskId));
+      const latest = await startUnderstanding(taskId);
+      setTask(latest);
       setRefreshKey((prev) => prev + 1);
+      // 收到回执即告知侧栏：这条任务已经动起来了
+      onTaskChange();
+      // 若后端报的仍是 pending，就由 `queued` 接着顶住，别在 finally 里忘掉「已点过」
+      setQueued(latest.understanding?.status === "pending");
     } catch (err) {
       setError(describeError(err).message);
+      setQueued(false);
     } finally {
       setStarting(false);
     }
-  }, [taskId, setTask, setError]);
+  }, [taskId, setTask, setError, onTaskChange]);
 
   const onRetryClip = useCallback(
     async (index: number) => {
@@ -177,7 +196,9 @@ function useUnderstanding(
   return {
     onStart: () => void onStart(),
     onRetryClip: (index: number) => void onRetryClip(index),
-    starting,
+    // `starting` 只覆盖「请求在途」，`queued` 覆盖「已回执但服务端仍报 pending」；
+    // 面板只认这一个标志，因此两者都要并进来，否则回执一落地按钮就退回「开始识别语音」。
+    starting: starting || queued,
     retryingIndex,
     refreshKey,
   };
@@ -190,25 +211,41 @@ function useUnderstanding(
 function useReview(
   task: Task | null,
   setTask: (task: Task) => void,
-  setError: (message: string | null) => void
+  setError: (message: string | null) => void,
+  onTaskChange: () => void
 ): ReviewActions {
   const [reviewing, setReviewing] = useState(false);
+  /**
+   * 已提交、但服务端还没进入复盘中：与识别侧同源，理由见 `useUnderstanding` 的 `queued`。
+   * 复盘的轮询在 `ReviewBlock` 里按 `review.status` 走，这里只负责让「已点过」这件事在
+   * 拿到服务端真实状态之前不被丢掉。
+   */
+  const [queued, setQueued] = useState(false);
   const taskId = task?.id ?? null;
+  const review = task?.review ?? null;
+
+  useEffect(() => {
+    if (queued && review !== null && review.status !== "pending") setQueued(false);
+  }, [queued, review]);
 
   const onReview = useCallback(async () => {
     if (taskId === null) return;
     setReviewing(true);
     setError(null);
     try {
-      setTask(await startReview(taskId));
+      const latest = await startReview(taskId);
+      setTask(latest);
+      onTaskChange();
+      setQueued(latest.review?.status === "pending");
     } catch (err) {
       setError(describeError(err).message);
+      setQueued(false);
     } finally {
       setReviewing(false);
     }
-  }, [taskId, setTask, setError]);
+  }, [taskId, setTask, setError, onTaskChange]);
 
-  return { onReview: () => void onReview(), reviewing };
+  return { onReview: () => void onReview(), reviewing: reviewing || queued };
 }
 
 /** 从最近任务打开的一条记录：只读取并展示，不在这里发起处理。 */
@@ -228,8 +265,8 @@ function OpenedTask({
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const understanding = useUnderstanding(task, setTask, setError);
-  const review = useReview(task, setTask, setError);
+  const understanding = useUnderstanding(task, setTask, setError, onTaskChange);
+  const review = useReview(task, setTask, setError, onTaskChange);
 
   const reload = useCallback(async () => {
     try {
@@ -383,12 +420,20 @@ export default function Workbench({
   const detailSection = taskId === null ? localSection : section;
   const fileRef = useRef<HTMLInputElement>(null);
   // 识别操作与结果刷新：切分完成后即可在本页直接启动识别，不必走历史记录
-  const understanding = useUnderstanding(task, setTask, (message) =>
-    setState((prev) => ({ ...prev, error: message }))
+  // 入队后立刻刷新侧栏：识别/复盘在后台跑，最近任务那一条不该停在旧状态上
+  const notifyTaskChange = onTaskChange ?? (() => {});
+  const understanding = useUnderstanding(
+    task,
+    setTask,
+    (message) => setState((prev) => ({ ...prev, error: message })),
+    notifyTaskChange
   );
   // 复盘操作：与识别共用同一条错误通道
-  const review = useReview(task, setTask, (message) =>
-    setState((prev) => ({ ...prev, error: message }))
+  const review = useReview(
+    task,
+    setTask,
+    (message) => setState((prev) => ({ ...prev, error: message })),
+    notifyTaskChange
   );
 
   // 轮询任务状态，直到进入终态；组件卸载或换文件时停止。

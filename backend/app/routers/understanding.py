@@ -72,6 +72,26 @@ def _require_clips(db: Session, task: Task) -> list[MediaClip]:
     return clips
 
 
+def _submit_understanding(task_id: str, db: Session) -> None:
+    """把识别交给后台执行器；执行器不可用时落成可重试的失败态，不留下假在途。
+
+    线程池已 shutdown 时 `executor.submit` 会抛 `RuntimeError`。此处若不接住，任务会停在
+    「进行中」而没有任何工作线程会推进它——过期清理的「在途任务跳过」只看状态列，那条视频
+    于是永远不会被回收。落成 `failed` 才是一个既能解释、也能由「重新执行」走出去的终态。
+    """
+    try:
+        submit(task_id, TASK_KIND_UNDERSTAND)
+    except RuntimeError as exc:
+        task = db.get(Task, task_id)
+        if task is not None:
+            task.mark_understanding_failed(f"任务未能入队：{exc}")
+            db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="后台执行器不可用，识别未入队，请稍后重试",
+        ) from exc
+
+
 @router.post(
     "/{task_id}/understanding",
     response_model=TaskResponse,
@@ -108,11 +128,17 @@ def start_understanding(
         )
 
     reset_task_understanding(db, task_id)
-    submit(task_id, TASK_KIND_UNDERSTAND)
+    # 入队当刻即落成「进行中」：`submit()` 只把任务交给线程池，不等工作线程真正开始，
+    # 因此「提交」与「任务体接管」之间必有一段间隙。若在间隙里对外报 `pending`，客户端
+    # 读到的既不是「未开始」也不是「进行中」——界面看起来与没点过一模一样（V0.6.2）。
+    # 状态取值与任务体共用 `Task.mark_understanding_running()`，两处不会漂移。
+    task.mark_understanding_running()
+    db.commit()
+    _submit_understanding(task_id, db)
     logger.info("任务 %s 的识别已入队", task_id)
 
     response.status_code = status.HTTP_202_ACCEPTED
-    return _to_response(_get_or_404(db, task_id), settings)
+    return _to_response(task, settings)
 
 
 @router.post("/{task_id}/clips/{index}/understanding", response_model=TaskResponse)

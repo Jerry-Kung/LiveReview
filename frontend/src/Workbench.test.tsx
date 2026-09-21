@@ -692,11 +692,7 @@ describe("切分结果展示", () => {
     await renderApp();
     selectFile();
 
-    try {
-      expect(await screen.findByText(/任务：已完成/)).toBeInTheDocument();
-    } finally {
-      require("fs").writeFileSync("dbg.json", (screen.getByRole("main") as HTMLElement).innerHTML, "utf8");
-    }
+    expect(await screen.findByText(/任务：已完成/)).toBeInTheDocument();
     const split = screen.getByLabelText("切分结果", { selector: "section" });
     const values = Array.from(split.querySelectorAll("dd")).map((node) => node.textContent);
     expect(values).toEqual(["2", "1:02:05", "通过"]);
@@ -1126,6 +1122,76 @@ describe("识别结果（V0.2）", () => {
     expect(screen.queryByText(/识别全文/)).not.toBeInTheDocument();
   });
 
+  it("识别入队后服务端仍报 pending，界面也应进入识别中并轮询到完成", async () => {
+    // V0.6.2 的缺陷现场：入队接口在后台线程接管前可能仍回 pending。
+    //
+    // 回执用未决 promise 钉住不返回：这样「已提交、服务端还没表态」这段窗口是稳定的、
+    // 可断言的，而不是与轮询赛跑。窗口内轮询必须已经启动（否则界面会永远停在「识别中…」），
+    // 且它拉回的 pending 不能把界面打回「开始识别语音」。
+    const pending = {
+      ...taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse()]),
+      understanding: {
+        status: "pending",
+        progress: 0,
+        clip_count: 0,
+        segment_count: 0,
+        failed_clip_count: 0,
+        error: null,
+        started_at: null,
+        finished_at: null,
+        model_name: "test-model",
+      },
+    };
+
+    let releasePost: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    let polls = 0;
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url, init) => {
+        if (url === "/api/tasks/t1/understanding" && init?.method === "POST") {
+          // 回执挂起：模拟「已入队但工作线程还没接管」，此时服务端只能报 pending
+          return new Promise<Response>((resolve) => {
+            void held.then(() => resolve(jsonResponse(202, pending) as unknown as Response));
+          }) as unknown as Response;
+        }
+        if (url === "/api/tasks/t1") {
+          polls += 1;
+          // 轮询先看到 pending（这就是缺陷现场），随后推进到终态
+          return jsonResponse(200, polls <= 2 ? pending : identifiedTask());
+        }
+        return undefined;
+      },
+    ]);
+
+    await renderApp();
+    selectFile();
+
+    await waitFor(() => expect(screen.getByRole("link", { name: /复盘分析/ })).toBeInTheDocument());
+    await gotoSection("内容理解");
+
+    fireEvent.click(await screen.findByRole("button", { name: "开始识别语音" }));
+
+    // 点下即在途：按钮立刻进入识别中并禁用，而不是停在原样
+    expect(await screen.findByRole("button", { name: "识别中…" })).toBeDisabled();
+    // 轮询确实被启动了：轮询拉回的 pending 没能把界面打回原样
+    await waitFor(() => expect(polls).toBeGreaterThan(0));
+    expect(screen.getByRole("button", { name: "识别中…" })).toBeDisabled();
+
+    // 放行回执后，轮询把状态推到终态
+    releasePost?.();
+    expect(await screen.findByText(/已识别片段/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "重新检查识别结果" })).not.toBeDisabled()
+    );
+  });
+
   it("切片尚未完成时内容理解页尚未开放并说明原因", async () => {
     mockApi([
       healthRoute,
@@ -1324,6 +1390,62 @@ describe("复盘结论（V0.3）", () => {
 
     await waitFor(() => expect(started).toBe(true));
     expect(await screen.findByRole("button", { name: "复盘中…" })).toBeDisabled();
+  });
+
+  it("复盘入队后服务端仍报 pending，界面也应进入复盘中并轮询到终态", async () => {
+    // 与识别侧同源：回执是 pending 时不能让按钮退回「开始复盘分析」，否则用户看到的是
+    // 「点了没反应」（V0.6.2）。轮询由 `running` 驱动，点下即启动。
+    const pending = {
+      status: "pending",
+      progress: 0,
+      clip_count: 0,
+      segment_count: 0,
+      batch_count: 0,
+      error: null,
+      started_at: null,
+      finished_at: null,
+      model_name: null,
+      warnings: [],
+      result: null,
+    };
+    const running = {
+      ...pending,
+      status: "running",
+      progress: 10,
+      batch_count: 1,
+      started_at: "2026-01-01T00:30:00Z",
+      model_name: "test-model",
+    };
+
+    let started = false;
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url, init) => {
+        if (url.endsWith("/complete")) return jsonResponse(200, { object_key: "k", size: 20 });
+        if (url === "/api/tasks/t1/review" && init?.method === "POST") {
+          started = true;
+          return jsonResponse(202, reviewedTask(pending));
+        }
+        if (url === "/api/tasks/t1") {
+          return jsonResponse(200, reviewedTask(started ? running : pending));
+        }
+        return undefined;
+      },
+    ]);
+
+    await renderApp();
+    selectFile();
+
+    const button = await screen.findByRole("button", { name: "开始复盘分析" });
+    fireEvent.click(button);
+
+    // 回执是 pending 时按钮不能退回「开始复盘分析」；轮询随后把状态推到 running。
+    // 「已提交，等待后台开始」那一瞬刻意不断言：它只在 pending 且轮询尚未启动时出现，
+    // 断言它会变成一条与轮询快慢赛跑的用例，而不是在验证行为。
+    expect(await screen.findByRole("button", { name: "复盘中…" })).toBeDisabled();
+    expect(await screen.findByText(/复盘进度 10%/)).toBeInTheDocument();
   });
 
   it("识别未完成时复盘分析页尚未开放并说明原因", async () => {

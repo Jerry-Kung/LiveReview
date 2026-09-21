@@ -37,7 +37,7 @@ from app.llm import (
     describe_error,
     get_review_client,
 )
-from app.models import Task, utcnow
+from app.models import PROGRESS_REVIEW_START, Task, utcnow
 from app.tasks.understanding import list_clips
 from app.transcript import (
     batch_review_input,
@@ -47,8 +47,8 @@ from app.transcript import (
 
 logger = logging.getLogger(__name__)
 
-# 复盘进度语义：认领 0 → 分批调用推进 10~90 → 落库完成 100
-PROGRESS_REVIEW_START = 10
+# 复盘进度语义：认领 0 → 分批调用推进 10~90 → 落库完成 100。
+# 起点 `PROGRESS_REVIEW_START` 定义在 `app/models.py`，理由同识别链。
 PROGRESS_REVIEW_END = 90
 PROGRESS_REVIEW_DONE = 100
 
@@ -100,15 +100,12 @@ def run_review(
         return
 
     batches = batch_review_input(records, max_chars=settings.review_input_chars_per_call)
-    task.review_status = REVIEW_STATUS_RUNNING
-    task.review_progress = PROGRESS_REVIEW_START
-    task.review_started_at = utcnow()
-    task.review_finished_at = None
-    task.review_error = None
+    # 状态取值与入队接口共用 `Task.mark_review_running()`；真实计数在本批之后写回，
+    # 因为方法会把它们归零（入队时还不知道这批要投入多少条记录）。
+    task.mark_review_running()
     task.review_segment_count = sum(1 for record in records if record["kind"] == "segment")
     task.review_clip_count = summary.succeeded_clip_count
     task.review_batch_count = len(batches)
-    task.updated_at = utcnow()
     db.commit()
 
     system_prompt = build_review_system_prompt()
