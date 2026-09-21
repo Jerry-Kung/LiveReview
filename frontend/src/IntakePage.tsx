@@ -5,7 +5,7 @@
  * 轮询任务）都在 `Workbench` 里，本组件通过 props 接收状态与动作——界面重构不该改变那段
  * 逻辑，因此这里一行处理逻辑都没有。
  *
- * 布局意图：上传区是页面视觉中心，右侧一栏回答「传完之后系统到底在做什么」。
+ * 布局意图：上传区是页面视觉中心，右侧一栏给第一次用的人一条从上传到拿到结论的操作路径。
  */
 
 import type { ChangeEvent, DragEvent } from "react";
@@ -13,27 +13,33 @@ import UploadProgress from "./UploadProgress";
 import { IconFile, IconInfo, IconUploadCloud } from "./icons";
 import { formatBytes } from "./format";
 
-/** 处理说明的四个步骤，与后端处理链路的阶段划分一致。 */
-const STEPS = [
-  { title: "媒体解析", note: "检测视频格式、分辨率、编码信息" },
-  { title: "格式处理", note: "按视频格式做必要处理，输出标准容器" },
-  { title: "视频切片", note: "按时间切分视频，生成多个片段" },
-  { title: "完整性校验", note: "校验切片完整性，确保数据可用" },
+/**
+ * 使用说明的五个步骤：从上传录屏到拿到复盘报告的完整操作路径。
+ *
+ * 按钮名与页面名照抄界面文案，用户照着点即可。刻意不写后台做了什么——那些环节由系统
+ * 自动完成，用户既看不到也影响不了，摆在这里只会占掉首屏最显眼的一栏。
+ */
+const GUIDE_STEPS = [
+  { title: "上传录屏", note: "支持 MP4 / TS，单个文件最大 2 GB" },
+  { title: "等待视频处理", note: "系统自动解析与切片，完成后进入任务详情" },
+  { title: "开始内容识别", note: "在「内容理解」页点「开始识别语音」" },
+  { title: "开始复盘分析", note: "在「复盘分析」页点「开始复盘分析」" },
+  { title: "查看与下载结论", note: "点「查看报告」下载 Markdown 复盘报告" },
 ] as const;
 
 export type IntakePhase = "idle" | "loading" | "unfinished" | "uploading" | "assembling" | "error";
 
-/** 处理说明栏：上传区右侧的固定内容，任何时候都在。 */
-function ProcessNotes() {
+/** 使用说明栏：上传区右侧的固定内容，任何时候都在。 */
+function UsageGuide() {
   return (
-    <aside className="panel" aria-label="处理说明">
+    <aside className="panel" aria-label="使用说明">
       <div className="panel-head">
         <IconInfo size={18} />
-        <h2 className="panel-title">处理说明</h2>
+        <h2 className="panel-title">使用说明</h2>
       </div>
 
       <ol className="steps">
-        {STEPS.map((step, index) => (
+        {GUIDE_STEPS.map((step, index) => (
           <li className="step" key={step.title}>
             <span className="step-no num" aria-hidden="true">
               {String(index + 1).padStart(2, "0")}
@@ -41,13 +47,14 @@ function ProcessNotes() {
             <span>
               <span className="step-title">{step.title}</span>
               <span className="step-note">{step.note}</span>
-            </span>          </li>
+            </span>
+          </li>
         ))}
       </ol>
 
       <p className="callout">
         <IconInfo size={16} />
-        处理完成后，您可以在任务列表中查看分析结果与复盘报告。
+        识别与复盘都要点一下按钮才会开始。视频保留 72 小时，转写与复盘结论会一直保留。
       </p>
     </aside>
   );
@@ -252,7 +259,7 @@ export default function IntakePage({
           </div>
         </section>
 
-        <ProcessNotes />
+        <UsageGuide />
       </div>
     </div>
   );
