@@ -55,6 +55,8 @@ function Thumbnail({ metadata }: { metadata: TaskMetadata | null }) {
 
 export type TaskActions = {
   onRetry: () => void;
+  /** 视频过期后重新上传：先清掉这条任务，再回到上传入口（不新增后端接口） */
+  onReupload: () => void;
   onDelete: () => void;
   onReset: () => void;
   deleting: boolean;
@@ -167,9 +169,16 @@ export default function TaskDetail({
         </div>
 
         <div className="detail-actions">
-          <button type="button" className="btn" onClick={actions.onRetry}>
-            重新执行任务
-          </button>
+          {task.video_expired ? (
+            // 过期任务的视频已不在桶里，「重新执行」必然失败；这里给的是唯一能走通的动作
+            <button type="button" className="btn" onClick={actions.onReupload}>
+              重新上传视频
+            </button>
+          ) : (
+            <button type="button" className="btn" onClick={actions.onRetry}>
+              重新执行任务
+            </button>
+          )}
           <button
             type="button"
             className="btn btn--primary"
@@ -250,7 +259,12 @@ export default function TaskDetail({
         </section>
       )}
 
-      {task.error && <p className="detail-error">失败原因：{task.error}</p>}
+      {task.error && (
+        <p className="detail-error">
+          {task.video_expired ? "说明：" : "失败原因："}
+          {task.error}
+        </p>
+      )}
       {notice && <p className="detail-error">{notice}</p>}
     </div>
   );

@@ -44,6 +44,10 @@ export function hasUnderstanding(task: Task): boolean {
  */
 export function sectionBlockedReason(task: Task, section: TaskSection): string | null {
   if (section === "understanding") {
+    if (task.video_expired) {
+      // 已识别过的不拦：转写是落库的，与视频是否还在无关（见本文件顶部「看产物」的原则）
+      return hasUnderstanding(task) ? null : "视频已按 72 小时保留期清理，请重新上传";
+    }
     return processingFinished(task) ? null : "视频处理完成后开放";
   }
   if (section === "review") {

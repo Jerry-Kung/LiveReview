@@ -4,12 +4,19 @@
 它们共用执行器，由 `submit(task_id, phase)` 的 phase 参数区分。
 """
 
+from app.tasks.cleanup import (
+    EXPIRED_REASON,
+    sweep_expired_videos,
+    sweep_orphan_media,
+)
 from app.tasks.executor import (
     list_unfinished_uploads,
     requeue_pending,
     resume_interrupted_uploads,
     run_sync,
     shutdown,
+    start_cleanup_loop,
+    stop_cleanup_loop,
     submit,
 )
 from app.tasks.review import (
@@ -56,6 +63,7 @@ from app.tasks.understanding import (
 )
 
 __all__ = [
+    "EXPIRED_REASON",
     "PROGRESS_CONVERTED",
     "PROGRESS_DONE",
     "PROGRESS_PROBED",
@@ -97,5 +105,9 @@ __all__ = [
     "run_task",
     "run_understanding",
     "shutdown",
+    "start_cleanup_loop",
+    "stop_cleanup_loop",
     "submit",
+    "sweep_expired_videos",
+    "sweep_orphan_media",
 ]

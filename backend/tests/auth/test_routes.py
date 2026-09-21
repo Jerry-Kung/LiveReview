@@ -287,7 +287,7 @@ def test_status_requires_login(anonymous_client):
 
 def test_status_reports_configuration_without_secrets(client):
     data = client.get("/api/auth/status").json()
-    assert data["version"] == "0.5.2"
+    assert data["version"] == "0.6.1"
     assert data["database"] == "ok"
     assert data["storage"] in ("configured", "not_configured", "unavailable")
     assert data["llm"] in ("configured", "not_configured")

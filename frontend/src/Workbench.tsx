@@ -273,6 +273,32 @@ function OpenedTask({
     }
   };
 
+  /**
+   * 过期后重新上传：先清掉这条任务，再回到上传入口。
+   *
+   * 刻意不在原任务上续跑——视频已不在桶里，切分、识别、复盘全都要重来，复用旧任务只会
+   * 留下一个半新半旧的记录（旧切片行、旧识别结果）。清掉后新建任务，语义与「从头重跑」
+   * 一致，也不必新增接口。
+   */
+  const reupload = async () => {
+    const confirmed = window.confirm(
+      "视频已按 72 小时保留期清理。重新上传会先删除这条任务记录（转写与复盘结论也会一并删除），" +
+        "然后回到上传入口。确认继续？"
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteTask(taskId);
+      onTaskChange();
+      onBackToList();
+    } catch (err) {
+      setError(describeError(err).message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (error !== null && task === null) {
     return (
       <div className="page">
@@ -306,6 +332,7 @@ function OpenedTask({
       taskLoaded
       actions={{
         onRetry: () => void retry(),
+        onReupload: () => void reupload(),
         onDelete: () => void remove(),
         onReset: onBackToList,
         deleting,
@@ -676,6 +703,8 @@ export default function Workbench({
           notice={task.error ? null : state.error}
           actions={{
             onRetry: handleRetryTask,
+            // 过期任务的「重新上传」与「删除视频」是同一个动作：清掉这条任务后回上传页
+            onReupload: () => void handleDelete(),
             onDelete: handleDelete,
             onReset: handleReset,
             deleting,

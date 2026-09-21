@@ -122,8 +122,8 @@ def test_resume_reuses_local_copy_when_object_is_missing(
     assert storage.get_object_bytes(storage.uploaded_keys[0]) == b"x" * FILE_SIZE
     task = client.get(f"/api/tasks/{task_id}").json()
     assert task["object_key"] == storage.uploaded_keys[0]
-    # 本地副本保留：它是后续探测与切分的输入，成功后由任务体删除
-    assert copy.is_file()
+    # 副本在上传成功后即释放（V0.6.1）：任务体需要时按对象键重新取回
+    assert not copy.exists()
 
 
 def test_resume_reports_failure_without_losing_chunks(

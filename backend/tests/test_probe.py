@@ -117,15 +117,20 @@ def test_local_copy_is_removed_after_successful_processing(client, media_root):
     assert not original_path(media_root, data["task_id"], "live.ts").exists()
 
 
-def test_local_copy_is_kept_when_probe_fails(client, media_root, probe_fails):
-    """探测失败保留副本，便于在容器内用同一份文件复跑 ffprobe 定位问题。"""
+def test_local_copy_is_released_even_when_probe_fails(client, media_root, probe_fails):
+    """探测失败同样释放本地副本（V0.6.1 起）。
+
+    此前失败会保留副本以便在容器内复跑 ffprobe；代价是失败任务会长期占着 GB 级文件，
+    测试环境很快就会满。改为一律释放，复现时从对象存储重新取回（见
+    `test_processing_redownloads_source_when_local_copy_is_missing`）。
+    """
     data = _complete(client)
     task = _task(client, data["task_id"])
 
     assert task["status"] == "failed"
     assert "ffprobe 探测失败" in task["error"]
     assert task["metadata"] is None
-    assert original_path(media_root, data["task_id"], "live.ts").is_file()
+    assert not original_path(media_root, data["task_id"], "live.ts").exists()
 
 
 def test_probe_failure_reason_is_visible_and_retryable(client, media_root, probe_fails):
@@ -295,7 +300,8 @@ def test_probe_failure_does_not_block_other_tasks(
 
     assert _task(client, bad["task_id"])["status"] == "failed"
     assert _task(client, good["task_id"])["status"] == "succeeded"
-    assert original_path(media_root, bad["task_id"], "live.ts").is_file()
+    # 无论成败都不留本地副本（V0.6.1）：失败那场不会占着磁盘影响后续上传
+    assert not original_path(media_root, bad["task_id"], "live.ts").exists()
     assert not original_path(media_root, good["task_id"], "live.ts").exists()
 
 

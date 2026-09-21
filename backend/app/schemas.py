@@ -288,6 +288,10 @@ class TaskResponse(BaseModel):
     clips: list[TaskClipResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    # 视频过期（V0.6.1）：`expired_at` 非空表示云端视频已按保留期清理，`video_expired` 是
+    # 它的布尔视图，供前端一处判断。过期只影响视频，转写与复盘结论照常可用。
+    expired_at: datetime | None = None
+    video_expired: bool = False
 
 
 class TaskListResponse(BaseModel):

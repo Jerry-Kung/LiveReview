@@ -182,10 +182,13 @@ def test_local_products_are_cleaned_after_success(client, media_root):
 # —— 失败与重试 ——
 
 
-def test_split_failure_is_visible_and_keeps_source_for_retry(
+def test_split_failure_is_visible_and_releases_source(
     client, media_root, monkeypatch, tmp_path
 ):
-    """切分失败时原因落库，且原始副本保留，便于在容器内复现。"""
+    """切分失败时原因落库，本地副本同样释放（V0.6.1）。
+
+    失败原因仍要可见可复现，但复现改为从对象存储取回，而不是把 GB 级文件留在盘上。
+    """
     monkeypatch.setenv("LIVERREVIEW_FAKE_FFMPEG_MODE", "fail")
 
     data = _complete(client)
@@ -193,7 +196,7 @@ def test_split_failure_is_visible_and_keeps_source_for_retry(
 
     assert task["status"] == "failed"
     assert "执行失败" in task["error"]
-    assert original_path(media_root, data["task_id"], "live.ts").is_file()
+    assert not original_path(media_root, data["task_id"], "live.ts").exists()
 
 
 def test_clip_without_audio_fails_the_task(client, monkeypatch):

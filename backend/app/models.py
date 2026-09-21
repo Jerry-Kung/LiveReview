@@ -208,6 +208,13 @@ class Task(Base):
     coverage_issues_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     split_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # 视频过期（V0.6.1）：对象存储中的原始视频与切片已按保留期清理的时刻。
+    # 可空，因此旧库能直接补列（见 `app/database.py`）。非空即表示「视频已不可取」，
+    # 但转写与复盘结论仍在——本版只删视频，不删结论。
+    video_expired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     upload_id: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("upload_sessions.id"), nullable=True
     )
@@ -278,6 +285,11 @@ class Task(Base):
     def has_coverage_check(self) -> bool:
         """是否已做过覆盖校验：区分「校验通过」与「尚未校验」。"""
         return self.split_checked_at is not None
+
+    @property
+    def video_expired(self) -> bool:
+        """视频是否已过保留期被清理：区分「视频已删」与「从未上传成功」。"""
+        return self.video_expired_at is not None
 
     @property
     def has_review(self) -> bool:

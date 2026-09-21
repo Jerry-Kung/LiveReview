@@ -70,6 +70,19 @@ export function taskStatusLabel(status: string): string {
 }
 
 /**
+ * 视频过期后的状态文案（V0.6.1）。
+ *
+ * 不复用 `TASK_LABELS`：过期是独立于切分状态的另一件事（`status` 仍可能是 succeeded），
+ * 混进去会让「已完成」与「视频没了」在界面上互相覆盖。过期归 warn 而不是 error——
+ * 结论还在，这只是需要用户再传一次视频。
+ */
+export const VIDEO_EXPIRED_LABEL = "视频已过期";
+
+export function videoExpiredTone(): "warn" {
+  return "warn";
+}
+
+/**
  * 任务状态在界面上的语气：只在成功时是健康态。
  *
  * 取值与 `.status` 的 `data-tone` 一一对应（ok / busy / warn / error），
@@ -135,6 +148,8 @@ export function formatChannels(channels: number | null): string {
 
 /** 任务状态加上处理进度；只有处理中的任务才需要百分比。 */
 export function describeTask(task: Task): string {
+  // 过期优先于切分状态：用户最需要知道的是「视频没了、要重新上传」
+  if (task.video_expired) return VIDEO_EXPIRED_LABEL;
   const label = taskStatusLabel(task.status);
   return task.progress > 0 && task.status === "processing" ? `${label} ${task.progress}%` : label;
 }

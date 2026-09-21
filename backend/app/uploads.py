@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import chunks as chunk_store
 from app.config import Settings
-from app.media.paths import original_path
+from app.media.paths import original_path, remove_file
 from app.models import Task, UploadSession, utcnow
 from app.storage import OBJECT_KIND_ORIGINAL, StorageError, describe_error, get_storage
 from app.tasks.runner import (
@@ -70,6 +70,9 @@ def finalize(db: Session, session: UploadSession, task: Task, settings: Settings
     只把状态推到 `uploaded`。启动恢复会把中途中断的会话再跑一遍，重复的后果是桶里多出
     一份没人引用的 GB 级对象与一次多余的几十分钟上传，因此这里必须幂等。
 
+    **本地视频副本在入库成功后即释放**（V0.6.1）：探测与切分改从对象存储按需取回，本地
+    磁盘不再囤积视频。任务被认领前若进程重启，副本会由启动时的残留清扫收走。
+
     失败原因写入会话与任务两处，并抛出 `UploadFinalizeError`。
     """
     object_key = task.object_key
@@ -105,11 +108,14 @@ def finalize(db: Session, session: UploadSession, task: Task, settings: Settings
         _mark_failed(db, session, task, exc)
         raise UploadFinalizeError(describe_error(exc)) from exc
 
+    # 体积必须在删副本之前取：删完再 stat 只能拿到默认值
+    size = local_copy.stat().st_size if local_copy.is_file() else session.declared_size
+
     session.status = STATUS_COMPLETED
     session.error = None
     session.updated_at = utcnow()
     task.object_key = object_key
-    task.size = local_copy.stat().st_size if local_copy.is_file() else session.declared_size
+    task.size = size
     task.status = STATUS_UPLOADED
     task.progress = 0
     task.error = None
@@ -117,6 +123,10 @@ def finalize(db: Session, session: UploadSession, task: Task, settings: Settings
     task.process_token = None
     task.updated_at = utcnow()
     db.commit()
+
+    # 对象已在存储中就位，本地那份完整副本完成使命（V0.6.1 起不再保留）
+    _drop_local_copy(settings, task, session)
+
     return object_key
 
 
@@ -133,6 +143,16 @@ def _drop_chunks(settings: Settings, session: UploadSession) -> None:
         chunk_store.cleanup(settings.media_root, session.id)
     except OSError as exc:  # noqa: BLE001 —— 清理失败不改变「已入库」的结论
         logger.warning("上传会话 %s 分片清理失败：%s", session.id, exc)
+
+
+def _drop_local_copy(settings: Settings, task: Task, session: UploadSession) -> None:
+    """删除入库成功后遗留的本地原始副本。
+
+    入库本身可能被启动恢复重跑，因此这里失败只记 warning：副本残留由启动清扫兜底，
+    不该因为一次 unlink 失败就把已经成功的入库判死。
+    """
+    path = original_path(settings.media_root, task.id, session.filename)
+    remove_file(path, description="入库后的本地原始副本")
 
 
 def _drop_merged(settings: Settings, session: UploadSession) -> None:

@@ -32,8 +32,25 @@ async def lifespan(app: FastAPI):
         logger.warning("鉴权配置：%s", warning)
     # 进程重启后在途任务已丢失，把待处理任务重新入队
     tasks.requeue_pending()
+    # 无主的本地视频（任务被删、或释放前进程被杀）在这里收掉：本地不该囤积视频文件
+    _sweep_local_media()
+    # 视频过期清理常驻：对象存储里的原始视频与切片只保留 72 小时
+    tasks.start_cleanup_loop()
     yield
+    tasks.stop_cleanup_loop()
     tasks.shutdown()
+
+
+def _sweep_local_media() -> None:
+    """清掉无主的本地视频文件。失败只记日志：这是清理动作，不该拦住服务启动。"""
+    from app.tasks.cleanup import sweep_orphan_media
+
+    try:
+        removed = sweep_orphan_media(get_settings().media_root)
+        if removed:
+            logger.info("已清理 %d 项无主本地产物", removed)
+    except Exception:  # noqa: BLE001 —— 清理失败不影响服务可用性
+        logger.exception("清理无主本地产物失败")
 
 
 def _purge_expired_sessions() -> None:

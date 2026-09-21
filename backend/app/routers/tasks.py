@@ -68,6 +68,9 @@ def _to_response(task: Task, settings: Settings) -> TaskResponse:
         clips=_to_clips(task, settings),
         created_at=task.created_at,
         updated_at=task.updated_at,
+        # 过期是独立字段而不是一种 status：`status` 只描述切分链（V0.1.5 起的既有约定）
+        expired_at=task.video_expired_at,
+        video_expired=task.video_expired,
     )
 
 
@@ -300,11 +303,15 @@ def retry_task(
     已成功上传的片段会按序号复用，重试只补齐未完成的片段。
     """
     task = _get_or_404(db, task_id)
+    # `object_key` 为空既覆盖「从未入库」，也覆盖「视频已过保留期被清理」——两者都不该
+    # 重新执行：前者应重新上传，后者必须重新上传，且要新建任务（重跑不复用任何旧产物）
     if task.status != STATUS_FAILED or task.object_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"任务当前状态为 {task.status}，只有已入库且失败的任务可以重新执行",
+        detail = (
+            "该任务的视频已按 72 小时保留期清理，无法重新执行；如需重新识别请重新上传视频"
+            if task.video_expired
+            else f"任务当前状态为 {task.status}，只有已入库且失败的任务可以重新执行"
         )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     reset = reset_task_for_retry(db, task_id)
     if reset is None:

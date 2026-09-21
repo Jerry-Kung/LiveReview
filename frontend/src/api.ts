@@ -217,6 +217,10 @@ export type Task = {
   clips: TaskClip[];
   created_at: string;
   updated_at: string;
+  /** 云端视频被保留期清理的时刻；非空表示视频已不可取（转写与复盘结论仍在） */
+  expired_at: string | null;
+  /** `expired_at` 的布尔视图：界面只在一处判断 */
+  video_expired: boolean;
 };
 
 export type MissingChunks = {

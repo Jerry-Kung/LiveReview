@@ -45,6 +45,22 @@ def _get_or_404(db: Session, task_id: str) -> Task:
     return task
 
 
+def _require_video(task: Task) -> None:
+    """视频已被保留期清理的任务不能再进识别：对象已经不在桶里，发出去只会白跑一趟。
+
+    `object_key` 为空正是「视频已清理」的判据（清理时一并清空）。过期任务的转写与复盘
+    结论仍然保留可看，因此这里拒绝的是「再识别」，不是「打开这条任务」。
+    """
+    if not task.object_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "该任务的视频已按 72 小时保留期清理，无法识别或重试识别；"
+                "转写与复盘结论仍然保留可看，如需重新识别请重新上传视频"
+            ),
+        )
+
+
 def _require_clips(db: Session, task: Task) -> list[MediaClip]:
     """取任务的切片；没有可识别片段时给出可操作的失败原因，而不是静默跑一遍空任务。"""
     clips = list_clips(db, task.id)
@@ -75,6 +91,7 @@ def start_understanding(
     from app.routers.tasks import _to_response
 
     task = _get_or_404(db, task_id)
+    _require_video(task)
     _require_clips(db, task)
 
     if task.understanding_status == UNDERSTANDING_STATUS_RUNNING:
@@ -113,6 +130,7 @@ def retry_clip(
     from app.routers.tasks import _to_response
 
     task = _get_or_404(db, task_id)
+    _require_video(task)
     if not settings.llm_configured:
         missing = "、".join(settings.llm_missing_fields)
         raise HTTPException(

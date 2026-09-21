@@ -48,8 +48,6 @@ from app.media import (
     refine_by_size,
     remove_clip,
     remove_clips_tree,
-    remove_file,
-    remove_original,
     remove_task_media,
     sha256_file,
     summarize,
@@ -116,7 +114,8 @@ def claim_task(db: Session, task_id: str) -> Task | None:
 def run_task(db: Session, task_id: str) -> None:
     """认领并执行任务，失败时把原因写回任务。
 
-    任何一步失败都落库为明确原因；已上传的片段与转换产物保留，便于重试续跑与在容器内复现。
+    任何一步失败都落库为明确原因；已上传的片段行保留，重试时按序号复用不必重传。
+    **本地视频一律不保留**（V0.6.1，见 `_process`）：需要复现时按对象键从对象存储取回。
     """
     task = claim_task(db, task_id)
     if task is None:
@@ -181,8 +180,22 @@ def _prepare_local_source(task: Task) -> Path:
 
 
 def _process(db: Session, task: Task) -> None:
-    """任务体：探测 → 转封装 → 切分上传 → 覆盖校验 → 清理本地产物。"""
+    """任务体：探测 → 转封装 → 切分上传 → 覆盖校验 → 释放本地产物。
+
+    **无论成败都不留本地视频**（V0.6.1）：释放动作放在最外层 `finally` 里，任务体中途
+    抛错也会执行。失败时不再保留副本——这是刻意的行为变更，代价是复现失败要从对象存储
+    重新取回（`_prepare_local_source` 的回下载分支正是为此存在）。留在磁盘上的 GB 级
+    文件会在测试环境累积到挤满磁盘，比「复现时多一次下载」贵得多。
+    """
     settings = get_settings()
+    try:
+        _run_pipeline(db, task, settings)
+    finally:
+        _release_local_video(task)
+
+
+def _run_pipeline(db: Session, task: Task, settings) -> None:
+    """任务体的实际步骤；本地文件由 `_process` 的 `finally` 统一释放。"""
     source = _prepare_local_source(task)
 
     metadata = _ensure_probed(db, task, source, settings)
@@ -198,15 +211,20 @@ def _process(db: Session, task: Task) -> None:
         clips = _split_and_upload(db, task, split_source, split_metadata, settings)
     finally:
         # 切片产物是中间态：上传成功的片段文件已即时删除，这里兜住失败与未上传的残片，
-        # 避免下一轮把残片当成有效片段复用（原始副本与转换产物保留，便于复现）。
+        # 避免下一轮把残片当成有效片段复用。
         _cleanup_clip_files(task, clips)
     _remove_clips_dir(task)
     _verify_coverage(db, task, split_metadata.duration_seconds, clips)
 
-    # 切分成功即释放中间产物：后续版本需要片段从对象存储取回，原始视频仍留在桶里
-    remove_original(settings.media_root, task.id, task.filename)
-    if converted:
-        remove_file(converted_path(settings.media_root, task.id), description="转封装产物")
+
+def _release_local_video(task: Task) -> None:
+    """释放任务的全部本地产物：原始副本、转封装产物与切片目录。
+
+    原始视频在对象存储里另有一份，因此删掉本地这份不影响重试——缺副本时
+    `_prepare_local_source` 会按对象键取回。
+    """
+    settings = get_settings()
+    remove_task_media(settings.media_root, task.id, task.filename)
 
 
 def _ensure_probed(db: Session, task: Task, source: Path, settings):

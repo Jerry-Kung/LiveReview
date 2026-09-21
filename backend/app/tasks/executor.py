@@ -43,6 +43,66 @@ _futures: dict[tuple[str, str], Future] = {}
 # 可重入锁：submit 持锁期间会调用 _get_executor，普通 Lock 会在同一线程内自死锁
 _lock = threading.RLock()
 
+# 视频过期清理线程（V0.6.1）：与任务线程池分开——它是周期性维护，不参与任务排队，
+# 也不该占用任务池的并发额度。放在执行器里的理由是两者同属「进程内后台工作」，
+# 启动与关闭的时序由同一处管理。
+_cleanup_thread: threading.Thread | None = None
+_cleanup_stop = threading.Event()
+
+
+def start_cleanup_loop(*, interval_seconds: int | None = None) -> None:
+    """启动视频过期清理线程；已在运行时为无操作。
+
+    线程是 daemon：进程被强杀时不必等它，残留的未清理对象由下一次启动接着处理。
+    每一轮都单独捕获异常——一轮失败（网络抖动、数据库忙）不该让清理永久停摆。
+    """
+    global _cleanup_thread
+    settings = get_settings()
+    if not settings.cleanup_enabled:
+        logger.info("视频过期清理已关闭（CLEANUP_ENABLED=false）")
+        return
+
+    interval = settings.cleanup_interval_seconds if interval_seconds is None else interval_seconds
+    with _lock:
+        if _cleanup_thread is not None and _cleanup_thread.is_alive():
+            return
+        _cleanup_stop.clear()
+        _cleanup_thread = threading.Thread(
+            target=_cleanup_loop,
+            args=(interval,),
+            name="cleanup",
+            daemon=True,
+        )
+        _cleanup_thread.start()
+    logger.info("视频过期清理已启动：每 %d 秒扫描一次", interval)
+
+
+def stop_cleanup_loop() -> None:
+    """停止清理线程并等待其退出；供应用关闭使用。"""
+    global _cleanup_thread
+    with _lock:
+        thread, _cleanup_thread = _cleanup_thread, None
+    if thread is None:
+        return
+    _cleanup_stop.set()
+    thread.join(timeout=5)
+    # join 超时不强杀：daemon 线程会随进程退出，这里只记一条便于排查
+    if thread.is_alive():
+        logger.warning("视频过期清理线程未在超时内退出，随进程退出")
+
+
+def _cleanup_loop(interval: int) -> None:
+    """清理线程主循环：按周期扫描过期视频，直到收到停止信号。"""
+    from app.tasks.cleanup import sweep_expired_videos
+
+    while not _cleanup_stop.wait(interval):
+        try:
+            removed = sweep_expired_videos()
+            if removed:
+                logger.info("本轮清理了 %d 条任务的过期视频", removed)
+        except Exception:  # noqa: BLE001 —— 单轮失败不终止线程
+            logger.exception("视频过期清理失败，下一轮继续")
+
 
 def _get_executor() -> ThreadPoolExecutor:
     global _executor

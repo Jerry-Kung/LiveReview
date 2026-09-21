@@ -50,6 +50,7 @@ function taskResponse(
   metadata: unknown = null,
   coverage: unknown = null,
   clips: unknown[] = [],
+  videoExpired = false,
 ) {
   return {
     id: "t1",
@@ -57,7 +58,8 @@ function taskResponse(
     status,
     progress: status === "succeeded" ? 100 : 0,
     filename: "live.ts",
-    object_key: "liverreview/original/live_1_abcd.ts",
+    // 视频已被保留期清理时对象键与过期时刻同时变化（与后端清理逻辑一致）
+    object_key: videoExpired ? null : "liverreview/original/live_1_abcd.ts",
     size: 20,
     error,
     metadata,
@@ -65,8 +67,14 @@ function taskResponse(
     clips,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+    expired_at: videoExpired ? "2026-01-04T00:00:00Z" : null,
+    video_expired: videoExpired,
   };
 }
+
+// 与后端 app/tasks/cleanup.py 的 EXPIRED_REASON 同义（测试里只断言关键片段）
+const EXPIRED_REASON =
+  "视频已超过 72 小时保留期并自动清理；转写与复盘结论仍然保留，如需继续识别请重新上传视频";
 
 const METADATA = {
   format_name: "mpegts",
@@ -395,6 +403,60 @@ describe("上传与任务链路", () => {
     // 重试必须真正重启轮询：同一次上传内点重试不能停在中途状态
     await waitFor(() => expect(screen.getByText(/任务：已完成/)).toBeInTheDocument());
     expect(screen.queryByText(/失败原因/)).not.toBeInTheDocument();
+  });
+
+  it("视频过期时给出重新上传入口，而不是必然失败的重新执行", async () => {
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) =>
+        url.startsWith("/api/tasks/")
+          ? jsonResponse(200, taskResponse("failed", EXPIRED_REASON, null, null, [], true))
+          : undefined,
+    ]);
+
+    await renderApp();
+    selectFile();
+
+    // 过期说明以「说明」而不是「失败原因」呈现：视频没了不等于处理失败
+    expect(await screen.findByText(/说明：.*保留期/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新上传视频" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新执行任务" })).not.toBeInTheDocument();
+  });
+
+  it("过期任务的重新上传会先清掉旧任务再回到上传入口", async () => {
+    const deleted: string[] = [];
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      // 先匹配 DELETE：mockApi 取第一个有响应的路由，而下面那条 GET 兜底不看方法
+      (url, init) => {
+        if (url.startsWith("/api/tasks/") && init?.method === "DELETE") {
+          deleted.push(url);
+          return jsonResponse(204, null);
+        }
+        return undefined;
+      },
+      (url) =>
+        url.startsWith("/api/tasks/")
+          ? jsonResponse(200, taskResponse("failed", EXPIRED_REASON, null, null, [], true))
+          : undefined,
+    ]);
+    // 删掉任务后要回到上传入口，因此确认框必须放行
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await renderApp();
+    selectFile();
+
+    fireEvent.click(await screen.findByRole("button", { name: "重新上传视频" }));
+
+    await waitFor(() => expect(deleted).toEqual(["/api/tasks/t1"]));
+    // 回到上传入口：上传区重新出现
+    await waitFor(() => expect(screen.getByText(/上传一场直播录屏/)).toBeInTheDocument());
   });
 
   it("任务完成后可删除已上传视频并回到初始态", async () => {
@@ -922,7 +984,6 @@ describe("识别结果（V0.2）", () => {
     selectFile();
 
     await new Promise((r) => setTimeout(r, 200));
-    require("fs").writeFileSync("dbg.json", document.body.innerHTML, "utf8");
     await gotoSection("内容理解");
 
     expect(await screen.findByText(/已识别片段/)).toBeInTheDocument();

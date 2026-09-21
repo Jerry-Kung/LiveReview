@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.5.2"
+    app_version: str = "0.6.1"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     tos_bucket: str | None = None
     tos_object_prefix: str = "liverreview/"
     tos_presigned_ttl_seconds: int = 3600
+
+    # 视频保留期（V0.6.1）：对象存储中的原始视频与切片最多存活这么久，到期由后台定时
+    # 清理线程删除（见 `app/tasks/cleanup.py`）。本地不保留任何视频文件，因此这一项决定
+    # 的是「云端还能取回多久」——未完成识别的任务过期后需要用户重新上传。
+    storage_video_ttl_seconds: int = 72 * 3600
+    # 过期扫描的周期（秒）：默认 15 分钟，比保留期细得多，删晚一点只是多占一会儿存储
+    cleanup_interval_seconds: int = 900
+    # 是否启用后台清理线程：测试与本地开发可关掉，避免用例之间互相干扰
+    cleanup_enabled: bool = True
 
     # 媒体工具路径（V0.1.4 起用 ffprobe 探测，V0.1.5 起用 ffmpeg 转封装与切分）。
     # 两者既可以是单个可执行文件名，也可以是「解释器 + 脚本」形式的列表
