@@ -55,7 +55,7 @@ docker compose -f docker/docker-compose.yml up --build
 
 后端容器不向宿主机发布端口（仅 compose 网络内 `expose 12439`），对外只保留前端这一个入口，避免与宿主机其它服务抢占端口。
 
-后端镜像内 ffmpeg 已安装，媒体与数据通过命名卷 `liverreview-media`、`liverreview-data` 持久化。
+后端镜像内 ffmpeg 已安装。**媒体与数据都用宿主机目录绑定**：`backend/media` 挂到 `/app/media`，`backend/data` 挂到 `/app/data`（数据库文件是 `backend/data/liverreview.db`）。两边是同一个文件，因此在宿主机用 `uv run python -m app.auth.init_admin` 建的账号，容器里的后端直接就能用，不必再进容器跑第二遍；反过来在容器里建号，宿主机也看得见。首次部署前先确认这两个目录存在（`backend/data` 与 `backend/media` 已由 `.gitignore` 排除，新克隆的仓库里可能没有），否则 compose 会以 root 身份创建它们，之后宿主机写文件会遇到权限问题。
 
 后端镜像直接使用 `pip` 从 `backend/requirements.txt` 安装依赖（apt 与 pip 均已切换为清华源），不依赖 uv。
 
@@ -95,6 +95,28 @@ python -m app.auth.init_admin
 **查看已有账号**：`python -m app.auth.init_admin --list`。输出只有账号、角色、显示名与上次登录时间，不含明文口令与哈希。
 
 **改口令**：再跑一次同名账号的初始化脚本。脚本会说明该账号已存在并单独问一次是否重设，答 `y` 才动手；`--force` 跳过询问（供脚本使用）。**重设口令会顺带作废该账号的全部旧会话**，需要重新登录——这正是把账号收进数据库要换来的性质，V0.5 那时改完口令旧登录态仍然有效。
+
+**在容器内建号**（测试环境：宿主机没装 uv、或只想在部署现场直接建一次）：
+
+```bash
+# 交互式，口令不回显；数据库已绑定到宿主机 backend/data/，在容器里建与在宿主机建是同一个库
+docker compose -f docker/docker-compose.yml exec backend python -m app.auth.init_admin
+
+# 非交互，供脚本与自动化（--password 会在 shell 历史里留痕，人工操作请用交互模式）
+docker compose -f docker/docker-compose.yml exec backend python -m app.auth.init_admin --username admin --password '<口令>' --display-name 管理员
+
+# 查看已有账号 / 重设口令（重设会作废该账号的全部旧会话）
+docker compose -f docker/docker-compose.yml exec backend python -m app.auth.init_admin --list
+docker compose -f docker/docker-compose.yml exec backend python -m app.auth.init_admin --force
+```
+
+`exec` 要求后端容器已在运行；**还没有起容器时**用 `run --rm` 起一个一次性的（脚本自己建表，空库也能跑）：
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm backend python -m app.auth.init_admin
+```
+
+注意 `run` 会连带解析并等待 `frontend` 的 `depends_on`，只是 `--rm` 用完即弃，不会留下额外容器。
 
 **非交互建号**（测试环境与自动化）：
 
@@ -185,7 +207,7 @@ PY
 - **上传失败**：`GET /api/uploads/{upload_id}` 与 `GET /api/tasks/{task_id}` 的 `error` 字段给出原因；服务端存储错误会带 `request_id`，可用它向火山引擎定位。分片仍保留在 `MEDIA_ROOT/chunks/{upload_id}/`，重新提交分片即可继续，不必重传整个文件。
 - **缺片**：完成接口返回 409 且带 `missing_chunks`，按该列表补齐后重新提交完成即可。
 - **任务停在 `uploaded`**：说明后台执行器未推进。检查容器日志有无执行器异常；重启容器会按该状态重新入队（`requeue_pending`）。
-- **磁盘占用**：未完成的上传会占用 `liverreview-media` 卷。确认无人续传后可删除 `MEDIA_ROOT/chunks/` 下对应会话目录。
+- **磁盘占用**：未完成的上传会占用宿主机 `backend/media`。确认无人续传后可删除 `MEDIA_ROOT/chunks/` 下对应会话目录。
 
 ## 7. 媒体探测（V0.1.4 起）
 
@@ -366,7 +388,7 @@ docker compose -f docker/docker-compose.yml exec backend python -c "import urlli
 
 - **关页面时已传完最后一片**：分片全部在服务端，容器下次启动时会自动把这次上传做完（合并 → 入库 → 建任务 → 入队处理），用户回来后从历史记录里看到结果即可，不必重传。
 - **关页面时还有分片没传**：缺的部分只能由浏览器补。前端会把当前上传会话留在浏览器本地，重开页面时提示「这次上传还没传完」，用户选一次同一个文件即补传缺片，已传分片不会重传。
-- **放弃一次未传完的上传**：点「放弃这次上传」只清掉浏览器本地凭据，服务端的分片仍留在 `liverreview-media` 卷上；确认无人续传后按第 6 节「磁盘占用」清理。
+- **放弃一次未传完的上传**：点「放弃这次上传」只清掉浏览器本地凭据，服务端的分片仍留在宿主机 `backend/media` 下；确认无人续传后按第 6 节「磁盘占用」清理。
 
 ### 排查要点（上传恢复）
 
@@ -389,10 +411,22 @@ docker compose -f docker/docker-compose.yml up -d
 - 改列语义（改类型、改可空性、重命名列），或改动已有数据的含义。
 
 ```bash
-docker compose -f docker/docker-compose.yml exec backend python -c "import pathlib; p=pathlib.Path('/app/data/liverreview.db'); p.unlink(missing_ok=True); print('数据库文件已删除，重启后重建')"
+# 数据库就在宿主机 backend/data/liverreview.db（容器内看到的 /app/data 是同一个文件），
+# 因此直接在宿主机删除即可，不必进容器
+rm -f backend/data/liverreview.db
 docker compose -f docker/docker-compose.yml restart backend
 ```
 
+删库后账号也一并消失，**需要重新执行一次 `python -m app.auth.init_admin`**（见 §4.1）。
+
 删除数据库会一并丢掉历史任务与探测结果（对象存储中的原始视频不受影响，但记录与对象的对应关系会丢失，需要重新上传）。
+
+**从命名卷切到宿主机目录（本次变更）**：老部署的数据库与媒体原在命名卷 `liverreview-data` / `liverreview-media` 里，换成绑定时容器会改读宿主机目录，卷里的东西不会自动搬过来——**换成绑定后必须重新建号**（旧卷里的账号与历史任务留在卷中，确认不再需要可 `docker volume rm` 删掉）。若打算保留旧数据，先在旧卷上执行一次 `init_admin`，再用 `docker compose cp` 把 `/app/data/liverreview.db` 拷到宿主机 `backend/data/`：
+
+```bash
+# 用旧配置（命名卷）起一次容器，建号后拷出来
+docker compose -f docker/docker-compose.yml exec backend python -m app.auth.init_admin
+docker compose -f docker/docker-compose.yml cp backend:/app/data/liverreview.db backend/data/liverreview.db
+```
 
 跨版本升级的注意点：V0.1.4 的任务在探测成功后已删除本地副本，这类任务重试时会按对象键从 TOS 取回原始视频再处理，属正常路径，只是多一次下载。V0.1.5 之前创建的任务在清单里没有切片记录，重试时会重新切分并上传，桶里多出来的旧对象不会被自动回收，需要时人工清理。

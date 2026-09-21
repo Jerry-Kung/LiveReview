@@ -14,16 +14,21 @@ services:
       APP_PORT: "12439"
       APP_RELOAD: "false"
       DATABASE_URL: sqlite:////app/data/liverreview.db
-      # 上传分片与合并临时文件的落盘位置，与 liverreview-media 卷对应
+      # 上传分片、原始视频副本与切片产物的落盘位置，与下面的 ../backend/media 绑定对应
       MEDIA_ROOT: /app/media
       # 测试环境强制真实存储：缺凭据时明确失败，不静默回落到本地 Mock
       STORAGE_BACKEND: tos
       # 模型配置（V0.2）从 backend/.env 注入，与 TOS 凭据同一处；这里只固定并发，
       # 使测试环境的模型调用节奏不随本地 .env 漂移
       LLM_CONCURRENCY: "1"
+    # 数据与媒体都绑定到宿主机目录，两边是同一份文件：
+    # 用命名卷时容器内那份在 `docker volume` 里，宿主机看不到，于是「在宿主机建了账号
+    # 却在容器里登录不了」——库里根本是两个文件。绑定之后在宿主机执行
+    # `python -m app.auth.init_admin` 建的账号，容器里的后端直接就能用，不必再进容器跑一遍。
+    # 目录不存在时由 compose 以 root 身份创建，因此首次部署前先手动建好这两个空目录。
     volumes:
-      - liverreview-media:/app/media
-      - liverreview-data:/app/data
+      - ../backend/data:/app/data
+      - ../backend/media:/app/media
     expose:
       - "12439"
     healthcheck:
@@ -41,7 +46,3 @@ services:
         condition: service_healthy
     ports:
       - "12439:80"
-
-volumes:
-  liverreview-media:
-  liverreview-data:

@@ -25,7 +25,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 
 ## 本地产物
 
-- **根目录**：`MEDIA_ROOT`（本地 `./media`，容器 `/app/media`，测试环境挂 `liverreview-media` 卷）。
+- **根目录**：`MEDIA_ROOT`（本地 `./media`，容器 `/app/media`，测试环境由 `docker-compose.yml` 把宿主机 `backend/media` 绑定到该路径）。
 - **约定**：`chunks/{上传会话 id}/{序号:06d}.part` 存分片，`assembling/{上传会话 id}.part` 存合并临时文件，`originals/{任务 id}{后缀}` 存合并后待处理的原始视频副本，`converted/{任务 id}.mp4` 存转封装产物，`clips/{任务 id}/clip_{序号:03d}.mp4` 存切片产物（序号补零使目录列表顺序等于时间顺序）。
 - **生命周期**：合并产物上传对象存储成功后转存为 `originals/` 下的副本；副本供探测与切分使用，处理成功即删除，失败保留以便在容器内复跑工具复现；重试时副本缺失则按对象键从对象存储取回同一路径。切片产物在上传对象存储成功后立即删除，避免 GB 级片段长期占盘。分片与临时文件在对象就位后清理，入库失败只清合并临时文件、保留分片，使用户无需重传整个 1～2GB 原文件。
 - **不入仓库**：产物目录由 `.gitignore` 与 `.dockerignore` 排除。
