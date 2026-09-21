@@ -14,11 +14,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 只进行满足验收标准所需的最小且完整的修改；
 - 小型任务（明确且局部的修改，通常只影响两三个文件）在简要检查后直接实现和验证，不创建计划或 Spec。中大型任务（跨多个文件/模块的功能实现或重构）请先澄清需求，制定计划；
 
-## 本机 Claude Code 环境（重要）
-
-- 本机 Claude Code 已从 C 盘迁移到 **D 盘**，所有相关本地文件（插件、Marketplace、配置、项目数据、自动记忆）都在 `D:\KLH\DevTools\ClaudeCode\ClaudeCodeData\`。
-- 查找 Claude Code 插件 / skill / 项目记忆时**不要**去 C 盘 `C:\Users\konglinghan\.claude`（该处已空），一律用 D 盘路径。
-
 ## 3. 文档管理
 
 - 项目文档统一存放于 `docs/` 目录，不散落在仓库其它位置；
@@ -27,3 +22,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 版本更新、重大变更时需及时更新文档，文档与代码同步演进；
 - 默认不进行全量文档阅读，仅阅读与当前任务直接相关的项目文档，默认不阅读历史版本归档文件；
 - 如有必要更新CLAUDE.md与README.md等核心文档，遵守最小化更新原则，不得添加任务无关的冗余内容。
+
+## 4. 环境设置（重要）
+
+- 本机 Claude Code 已从 C 盘迁移到 **D 盘**，所有相关本地文件（插件、Marketplace、配置、项目数据、自动记忆）都在 `D:\KLH\DevTools\ClaudeCode\ClaudeCodeData\`。
+- 查找 Claude Code 插件 / skill / 项目记忆时**不要**去 C 盘 `C:\Users\konglinghan\.claude`（该处已空），一律用 D 盘路径。
+- **重要**：本地环境不具备某些测试/验证操作的执行条件（无docker，12439端口被其他服务占用），你不要纠结于在本地完成所有的验证/复现操作，部分依赖实际运行环境的操作可转移到测试环境执行。测试环境前端访问地址：http://118.145.238.50:12439/（供你必要时查找问题使用）
