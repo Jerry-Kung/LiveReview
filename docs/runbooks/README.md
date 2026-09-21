@@ -4,4 +4,4 @@
 
 ## 文档索引
 
-- [deployment.md](deployment.md) — 本地运行、配置约定与 Docker Compose 测试环境部署
+- [deployment.md](deployment.md) — 新环境部署步骤、配置基线、上线后运维与已知限制

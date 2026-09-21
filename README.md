@@ -122,11 +122,11 @@ V0 的初始复盘维度包括：
 
 前端框架、数据库产品等未锁定项由开发工具根据项目实际条件选择并记录。该选择不应扩展本阶段业务范围。
 
-本地运行、配置与部署说明见 `docs/runbooks/deployment.md`。
+部署到新环境的完整步骤、配置基线与运维手册见 `docs/runbooks/deployment.md`。
 
-V0.2 起接入音画理解模型执行片段语音识别，模型地址、密钥与型号通过 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL_NAME` 配置；识别结果按原视频时间轴汇集为可核查的整场全文，接口与排查方法见 `docs/runbooks/deployment.md` 第 7.2 节。
+V0.2 起接入音画理解模型执行片段语音识别，模型地址、密钥与型号通过 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL_NAME` 配置；识别结果按原视频时间轴汇集为可核查的整场全文，识别链路的配置项与故障定位见 `docs/runbooks/deployment.md` §3.1 与 §4.4。
 
-V0.3 在此之上接入复盘分析：把整场语音转写交给文本模型，按裁剪后的《直播复盘分析准则》产出结构化复盘结论，接口与排查方法见 `docs/runbooks/deployment.md` 第 7.3 节，裁剪口径与设计取舍见 `docs/specs/v0.3-design.md`。
+V0.3 在此之上接入复盘分析：把整场语音转写交给文本模型，按裁剪后的《直播复盘分析准则》产出结构化复盘结论，配置项与故障定位见 `docs/runbooks/deployment.md` §3.1 与 §4.4，裁剪口径与设计取舍见 `docs/specs/v0.3-design.md`。
 
 ## 6. V0 版本规划
 

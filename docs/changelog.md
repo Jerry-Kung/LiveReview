@@ -74,7 +74,7 @@
 
 - **原因**：compose 原先用命名卷 `liverreview-data` 挂到 `/app/data`，数据库在 Docker 的卷里；在宿主机执行 `python -m app.auth.init_admin` 写的是 `backend/data/liverreview.db`，容器里的后端读不到。这**不是同步没做好，而是根本没有同步**——容器内外的路径指向两个不同的文件。
 - **改法**：`liverreview-data` / `liverreview-media` 两个命名卷改为绑定 `../backend/data` 与 `../backend/media`。宿主机建的账号容器直接可用，容器写的数据宿主机也看得见，排查问题不再需要 `docker exec` 进容器看库。
-- **换绑后的老部署要重新建号**：旧卷里的账号与历史任务不会自动搬到宿主机目录。要保留旧数据就先在旧卷上建号、用 `docker compose cp` 拷出来（步骤见 `runbooks/deployment.md` §8），不保留则重新跑一次初始化脚本即可，旧卷可 `docker volume rm` 删除。
+- **换绑后的老部署要重新建号**：旧卷里的账号与历史任务不会自动搬到宿主机目录。要保留旧数据就先在旧卷上建号、用 `docker compose cp` 拷出来（旧命名卷的迁移步骤见该文档的历史版本 §8，当前文档已不含此内容），不保留则重新跑一次初始化脚本即可，旧卷可 `docker volume rm` 删除。
 - **首次部署前目录要先存在**：`backend/data` 与 `backend/media` 都在 `.gitignore` 里，新克隆的仓库没有它们；缺目录时 compose 会以 root 身份创建，之后宿主机写文件会遇到权限问题。
 
 
