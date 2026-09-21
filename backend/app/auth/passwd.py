@@ -1,14 +1,16 @@
-"""命令行工具：生成可写进 `AUTH_USERS` 的口令哈希与签名密钥。
+"""命令行工具：生成或校验一份口令哈希。
 
 用法：
 
     python -m app.auth.passwd                 # 交互式输入口令（不回显）
     python -m app.auth.passwd --generate      # 生成一条随机口令并给出哈希
-    python -m app.auth.passwd --secret        # 生成一把 AUTH_SESSION_SECRET
     python -m app.auth.passwd --check <哈希>   # 校验哈希串格式是否可被本模块解析
 
-明文口令与哈希都只打印到标准输出，不落盘、不进日志——写进 `backend/.env`
-由任务方自己完成。
+V0.5.1 起账号存在数据库里，日常建号请用 `python -m app.auth.init_admin`（它直接写库，
+不需要手工搬运哈希）。这个工具保留下来是为了两件事：其一，校验一条哈希是否可用；
+其二，需要把哈希搬到别处时（例如导出给别的环境）有个不依赖数据库的生成入口。
+
+明文口令只打印到标准输出，不落盘、不进日志。
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ import string
 import sys
 
 from app.auth.password import DEFAULT_ITERATIONS, hash_password, verify_password
-from app.auth.session import generate_secret
 
 # 随机口令的字符集：去掉容易看错的 0/O/1/l/I，便于手工抄写
 PASSWORD_ALPHABET = "".join(
@@ -46,17 +47,10 @@ def _prompt_password() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="生成 AUTH_USERS 口令哈希或会话签名密钥")
+    parser = argparse.ArgumentParser(description="生成或校验一份口令哈希")
     parser.add_argument("--generate", action="store_true", help="生成一条随机口令并输出其哈希")
-    parser.add_argument("--secret", action="store_true", help="生成一把 AUTH_SESSION_SECRET")
     parser.add_argument("--check", metavar="哈希", help="校验一条口令哈希串能否被解析")
     args = parser.parse_args(argv)
-
-    if args.secret:
-        if args.generate or args.check:
-            parser.error("--secret 不能与 --generate / --check 同时使用")
-        print(generate_secret())
-        return 0
 
     if args.check:
         encoded = args.check

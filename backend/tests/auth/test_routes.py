@@ -1,11 +1,9 @@
-"""鉴权接口的 HTTP 契约：登录、退出、当前身份、状态，以及 Cookie 的收发。"""
+"""鉴权接口的 HTTP 契约：登录、退出、当前身份、状态，以及 Cookie 的收发与 CSRF。"""
 
 from __future__ import annotations
 
-import time
-
-from app.auth import session as ticket
-from tests.conftest import TEST_PASSWORD, TEST_SESSION_SECRET, TEST_USERNAME, hash_for_test
+from app.auth import session as token_module
+from tests.conftest import TEST_DISPLAY_NAME, TEST_PASSWORD, TEST_USERNAME
 
 
 def _login(client, username=TEST_USERNAME, password=TEST_PASSWORD):
@@ -19,15 +17,36 @@ def test_login_sets_session_cookie(anonymous_client):
     resp = _login(anonymous_client)
     assert resp.status_code == 200
     assert resp.json()["user"]["username"] == TEST_USERNAME
-    assert resp.json()["user"]["display_name"] == "测试用户"
+    assert resp.json()["user"]["display_name"] == TEST_DISPLAY_NAME
 
     cookie = resp.headers["set-cookie"]
-    assert ticket.COOKIE_NAME in cookie
-    # 脚本读不到会话票据；跨站请求默认不携带
+    assert token_module.COOKIE_NAME in cookie
+    # 脚本读不到会话令牌；跨站请求默认不携带
     assert "HttpOnly" in cookie
     assert "SameSite=lax" in cookie
     # 本地开发是 http，标了 Secure 会让登录后立刻掉线
     assert "Secure" not in cookie
+
+
+def test_login_stores_a_session_row(anonymous_client, db_session_factory):
+    """登录必须在库里留下一条会话：V0.5.1 的登录态靠它判定，而不是靠 Cookie 本身。"""
+    from app.auth import store
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        before = len(store.list_user_sessions(db, user))
+    finally:
+        db.close()
+
+    _login(anonymous_client)
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        assert len(store.list_user_sessions(db, user)) == before + 1
+    finally:
+        db.close()
 
 
 def test_login_rejects_wrong_password(anonymous_client):
@@ -63,20 +82,41 @@ def test_login_is_throttled_after_repeated_failures(anonymous_client):
     assert "频繁" in resp.json()["detail"]
 
 
-def test_login_reports_missing_user_configuration(anonymous_client, use_settings):
-    """未配置任何账号时明确报「没配」，而不是让每次登录都变成「口令不对」。"""
-    use_settings(auth_users="")
+def test_login_reports_when_no_account_exists(anonymous_client, db_session_factory):
+    """一个账号都没有时报 503 并给出下一步做什么。
+
+    这不再是「配置写错」（环境变量那版的说法），而是「部署还没做完」：账号在库里，
+    空库是冷启动的正常状态，文案必须指向初始化脚本，否则使用者只会反复怀疑口令。
+    """
+    from app.auth import store
+    from app.models import User
+
+    db = db_session_factory()
+    try:
+        db.query(User).delete()
+        db.commit()
+        assert store.count_users(db) == 0
+    finally:
+        db.close()
+
     resp = _login(anonymous_client)
     assert resp.status_code == 503
-    assert "尚未配置" in resp.json()["detail"]
+    assert "init_admin" in resp.json()["detail"]
 
 
-def test_login_reports_broken_user_configuration(anonymous_client, use_settings):
-    """配置写坏时报 500 并说明是服务端配置问题，不把内部格式抛给用户。"""
-    use_settings(auth_users="broken-entry")
-    resp = _login(anonymous_client)
-    assert resp.status_code == 500
-    assert "配置无效" in resp.json()["detail"]
+def test_session_is_independent_of_the_browser_cookie_jar(client):
+    """登录态由库里那一行决定，Cookie 只是搬运工。
+
+    这条钉的是与签名票据那版的行为差异：那时令牌自带全部信息，进程重启（密钥随机）
+    或账号从 AUTH_USERS 里摘掉都会让手上这张票失效；现在唯一的判据是库里那一行还在不在，
+    因此把同一张令牌重新装回请求里就该照样有效。
+    """
+    token = client.cookies.get(token_module.COOKIE_NAME)
+    assert token
+
+    client.cookies.clear()
+    client.cookies.set(token_module.COOKIE_NAME, token)
+    assert client.get("/api/auth/session").status_code == 200
 
 
 # ---- 当前身份 ----
@@ -85,7 +125,7 @@ def test_login_reports_broken_user_configuration(anonymous_client, use_settings)
 def test_session_returns_current_user(client):
     resp = client.get("/api/auth/session")
     assert resp.status_code == 200
-    assert resp.json()["user"] == {"username": TEST_USERNAME, "display_name": "测试用户"}
+    assert resp.json()["user"] == {"username": TEST_USERNAME, "display_name": TEST_DISPLAY_NAME}
 
 
 def test_session_requires_login(anonymous_client):
@@ -93,29 +133,69 @@ def test_session_requires_login(anonymous_client):
     assert anonymous_client.get("/api/auth/session").status_code == 401
 
 
-def test_session_rejects_forged_ticket(anonymous_client):
-    anonymous_client.cookies.set(ticket.COOKIE_NAME, "forged.ticket.value")
+def test_session_rejects_forged_token(anonymous_client):
+    anonymous_client.cookies.set(token_module.COOKIE_NAME, "forged-token-value")
     assert anonymous_client.get("/api/auth/session").status_code == 401
 
 
-def test_session_rejects_ticket_signed_with_another_secret(anonymous_client):
-    """换密钥即作废全部旧票据：这是本版「踢人」能力的实现方式。"""
-    anonymous_client.cookies.set(
-        ticket.COOKIE_NAME, ticket.issue("some-other-secret-value", TEST_USERNAME)
-    )
+def test_session_rejects_expired_session(anonymous_client, db_session_factory):
+    """过期后即便 Cookie 还在、库里那行也还在，一样拒绝。"""
+    from datetime import timedelta
+
+    from app.models import UserSession, utcnow
+
+    _login(anonymous_client)
+    token = anonymous_client.cookies.get(token_module.COOKIE_NAME)
+
+    db = db_session_factory()
+    try:
+        row = db.get(UserSession, token_module.hash_token(token))
+        row.expires_at = utcnow() - timedelta(seconds=1)
+        db.commit()
+    finally:
+        db.close()
+
     assert anonymous_client.get("/api/auth/session").status_code == 401
 
 
-def test_session_rejects_expired_ticket(anonymous_client):
-    stale = ticket.issue(TEST_SESSION_SECRET, TEST_USERNAME, issued_at=int(time.time()) - 13 * 3600)
-    anonymous_client.cookies.set(ticket.COOKIE_NAME, stale)
-    assert anonymous_client.get("/api/auth/session").status_code == 401
+def test_session_rejects_token_of_deleted_account(client, db_session_factory):
+    """账号被删后旧会话必须立即失效：这正是有状态会话要换来的能力之一。"""
+    from app.auth import store
+
+    token = client.cookies.get(token_module.COOKIE_NAME)
+    assert token
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        store.delete_user(db, user)
+    finally:
+        db.close()
+
+    client.cookies.clear()
+    client.cookies.set(token_module.COOKIE_NAME, token)
+    assert client.get("/api/auth/session").status_code == 401
 
 
-def test_session_rejects_ticket_of_removed_account(anonymous_client, use_settings):
-    """账号从配置里摘掉后，旧票据必须立即失效，不能继续通行。"""
-    use_settings(auth_users=f"someone:{hash_for_test('another-password')}")
-    assert anonymous_client.get("/api/auth/session").status_code == 401
+def test_changing_password_invalidates_other_sessions(client, db_session_factory):
+    """改口令要清掉旧会话，否则「改了密码但被人拿着旧 Cookie 继续用」是说不通的。"""
+    from app.auth import store
+
+    token = client.cookies.get(token_module.COOKIE_NAME)
+    assert token
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        store.set_password(db, user, "brand-new-password")
+        assert store.delete_user_sessions(db, user) >= 1
+    finally:
+        db.close()
+
+    # 拿着改口令前的那张令牌再来：库里已经没有它了
+    client.cookies.clear()
+    client.cookies.set(token_module.COOKIE_NAME, token)
+    assert client.get("/api/auth/session").status_code == 401
 
 
 # ---- 退出 ----
@@ -127,10 +207,70 @@ def test_logout_clears_cookie_and_blocks_reuse(client):
     assert client.get("/api/auth/session").status_code == 401
 
 
+def test_logout_deletes_the_server_side_session(client, db_session_factory):
+    """退出的关键是服务端那一行被删掉，而不只是浏览器丢了 Cookie。
+
+    V0.5 的签名票据做不到这一点：令牌若已被抄走，退出登录对抄走的那份毫无影响。
+    """
+    from app.auth import store
+
+    token = client.cookies.get(token_module.COOKIE_NAME)
+    assert client.post("/api/auth/logout").status_code == 204
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        assert store.list_user_sessions(db, user) == []
+    finally:
+        db.close()
+
+    # 拿着旧令牌再来一次：库里那行没了，谁来都换不到身份
+    client.cookies.clear()
+    client.cookies.set(token_module.COOKIE_NAME, token)
+    assert client.get("/api/auth/session").status_code == 401
+
+
 def test_logout_is_idempotent(anonymous_client):
     """重复退出不该报错：用户可能开了多个标签页，各自都点了退出。"""
     assert anonymous_client.post("/api/auth/logout").status_code == 204
     assert anonymous_client.post("/api/auth/logout").status_code == 204
+
+
+def test_logout_of_one_device_leaves_the_other_logged_in(client, db_session_factory):
+    """两台设备各持一张会话，退出其中一台不该把另一台也踢下线。
+
+    这是 V0.5 明确记着的短板（无状态票据只能换密钥让全员重登），本次补上。
+    第二张会话直接由 store 签发，而不是再登录一次——登录会把同名的 Cookie 覆盖掉，
+    「手上这张」与「另一台那张」就分不开了。
+    """
+    from app.auth import store
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        # 模拟另一台设备：同一个账号，另一张会话
+        other = store.create_session(
+            db, user, ttl_seconds=3600, absolute_ttl_seconds=7 * 24 * 3600
+        )
+        before = len(store.list_user_sessions(db, user))
+        assert before == 2
+    finally:
+        db.close()
+
+    assert client.post("/api/auth/logout").status_code == 204
+
+    db = db_session_factory()
+    try:
+        user = store.get_user_by_username(db, TEST_USERNAME)
+        # 只少了一张：当前这台下线了，另一台还在
+        assert len(store.list_user_sessions(db, user)) == before - 1
+    finally:
+        db.close()
+
+    # 另一台设备那张仍然有效：装回请求里照样能拿到身份
+    client.cookies.clear()
+    client.cookies.set(token_module.COOKIE_NAME, other.token)
+    assert client.get("/api/auth/session").status_code == 200
 
 
 # ---- 运行配置状态 ----
@@ -142,17 +282,17 @@ def test_status_requires_login(anonymous_client):
 
 def test_status_reports_configuration_without_secrets(client):
     data = client.get("/api/auth/status").json()
-    assert data["version"] == "0.5.0"
+    assert data["version"] == "0.5.1"
     assert data["database"] == "ok"
     assert data["storage"] in ("configured", "not_configured", "unavailable")
     assert data["llm"] in ("configured", "not_configured")
     assert data["auth_users"] == 1
-    assert data["auth_session_secret_configured"] is True
     assert data["auth_warnings"] == []
-    # 状态接口只回状态，绝不回显凭据或密钥本身
+    # 状态接口只回状态，绝不回显凭据。口令哈希也不该出现在任何一处：
+    # 账号数已经从「配置里有几条」变成「库里有几行」，顺手带出哈希是最容易犯的错
     serialized = str(data)
-    assert TEST_SESSION_SECRET not in serialized
     assert "test-api-key" not in serialized
+    assert "pbkdf2_sha256" not in serialized
 
 
 def test_status_lists_missing_configuration_names_only(client, use_settings):
@@ -162,38 +302,41 @@ def test_status_lists_missing_configuration_names_only(client, use_settings):
     assert data["llm_missing"] == ["LLM_API_KEY"]
 
 
-def test_status_warns_when_session_secret_is_missing(client, monkeypatch, test_settings):
-    """签名密钥未配置时把「重启即全员掉线」写进状态，而不是只留一行启动日志。
+def test_status_counts_accounts_from_the_database(client, db_session_factory):
+    from app.auth import store
 
-    与下一条同样只替换派生属性：`auth_session_secret_configured` 是密钥是否配置的
-    唯一判据，把它掰成 False 就能覆盖这条告警分支，而不必真的换掉签名密钥。
+    db = db_session_factory()
+    try:
+        store.create_user(db, username="second", password="another-password")
+    finally:
+        db.close()
+
+    assert client.get("/api/auth/status").json()["auth_users"] == 2
+
+
+def test_account_state_warns_when_no_account_exists(client, db_session_factory, test_settings):
+    """空库时把「没人能登录」写进启动告警与状态接口。
+
+    这里不通过 `/api/auth/status` 断言：当前这个会话正挂在被测账号上，把账号全删掉会先
+    让会话失效，请求停在 401 上，测到的就不是告警分支了。改为直接问配置层——它同时
+    供启动日志与状态接口使用，是这条告警的唯一来源。
     """
-    from app.config import Settings
+    from app.auth import store
+    from app.models import User
 
-    monkeypatch.setattr(Settings, "auth_session_secret_configured", property(lambda self: False))
-    monkeypatch.setattr(
-        Settings,
-        "auth_warnings",
-        property(lambda self: ["AUTH_SESSION_SECRET 未配置"]),
-    )
-    data = client.get("/api/auth/status").json()
-    assert data["auth_session_secret_configured"] is False
-    assert any("AUTH_SESSION_SECRET" in item for item in data["auth_warnings"])
+    db = db_session_factory()
+    try:
+        db.query(User).delete()
+        db.commit()
+        assert store.count_users(db) == 0
+    finally:
+        db.close()
 
-
-def test_status_warns_when_session_secret_is_short(client, monkeypatch):
-    """密钥可配置但过短时只告警、不阻断：服务照常可用，隐患写在状态里。
-
-    只替换这一个派生属性，不动签名密钥本身——换掉密钥会让手上这张票据立刻失效，
-    请求会停在 401，断言就变成了在测「换了密钥会掉线」。
-    """
-    from app.config import Settings
-
-    monkeypatch.setattr(
-        Settings, "auth_warnings", property(lambda self: ["AUTH_SESSION_SECRET 过短"])
-    )
-    data = client.get("/api/auth/status").json()
-    assert any("过短" in item for item in data["auth_warnings"])
+    count, problem = test_settings.auth_account_state()
+    assert count == 0
+    assert problem is not None
+    assert "init_admin" in problem
+    assert test_settings.auth_warnings == [problem]
 
 
 # ---- CSRF 底线 ----
@@ -214,3 +357,13 @@ def test_read_request_is_not_origin_checked(client):
     """读请求不做同源校验：跨站读有浏览器同源策略兜着，业务上也不需要再拦一道。"""
     resp = client.get("/api/auth/session", headers={"Origin": "https://evil.example.com"})
     assert resp.status_code == 200
+
+
+def test_login_from_foreign_origin_is_rejected(anonymous_client):
+    """登录也要挡跨站发起：否则攻击者能让受害者的浏览器替他建一个会话。"""
+    resp = anonymous_client.post(
+        "/api/auth/login",
+        json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
+        headers={"Origin": "https://evil.example.com"},
+    )
+    assert resp.status_code == 403

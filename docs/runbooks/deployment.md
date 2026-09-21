@@ -20,7 +20,7 @@
 - **模型接入（V0.2 起）**通过 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL_NAME` 三项配置，对接 OpenAI 兼容的 `responses` 接口（当前使用火山引擎方舟的音画理解模型）。**三项都是识别的前置条件**：缺失时切分链路照常工作，但识别接口直接返回 503 并列出缺失项名称，不会逐片各失败一次。`LLM_TIMEOUT_SECONDS`（单次视频理解请求超时，默认 900 秒）是本版最容易低估的一项——分钟级的片段识别在网络与模型排队叠加后会逼近这个值，素材更长或并发更高时应上调。`LLM_FPS`（送模型的采样帧率，默认 1）、`LLM_MAX_ATTEMPTS`（单片最大尝试次数，默认 3）、`LLM_CONCURRENCY`（片段识别并发数，默认 1，串行）、`LLM_CLIP_URL_TTL_SECONDS`（片段预签名视频地址有效期，默认 7200 秒，须覆盖排队与单次识别耗时）、`LLM_UNDERSTANDING_PROMPT`（识别题面，留空使用默认的「识别片段中的所有人声语音并判断语气」）。**复盘（V0.3 起）复用同一组 `LLM_*` 配置**，另有 `REVIEW_TIMEOUT_SECONDS`（单次复盘请求超时，默认 300 秒，纯文本分析量级远小于视频理解）、`REVIEW_MAX_ATTEMPTS`（单次复盘的最大尝试次数，默认 3）、`REVIEW_INPUT_CHARS_PER_CALL`（单次调用送出的转写字符数上限，默认 20000，超出则按记录边界分批后合并）。
 - 预处理与切分（V0.1.5 起）通过 `FFMPEG_PATH`（形式同 `FFPROBE_PATH`）、`SPLIT_MAX_DURATION_SECONDS`（单片最长时长，默认 3600 秒）、`SPLIT_MAX_CLIP_BYTES`（单片最大体积，默认 `1073741824` 即 1GiB）、`SPLIT_MIN_CLIP_SECONDS`（体积超限时递归对半的下限，默认 1 秒）、`SPLIT_TIMEOUT_SECONDS`（单次转封装/切片调用超时，默认 600 秒）、`FFMPEG_MAX_OUTPUT_BYTES`（ffmpeg stderr 收集上限，默认 8MB）配置。**`SPLIT_MAX_DURATION_SECONDS` 与 `SPLIT_MAX_CLIP_BYTES` 是硬约束**：调小它们会让片段更多、切分更慢，调大则可能超过后续识别环节的输入限制。
 
-- **用户登录（V0.5 起）**通过 `AUTH_USERS` 配置初始化用户，格式为逗号分隔的 `账号:口令哈希[:显示名]`；口令哈希用 `cd backend && uv run python -m app.auth.passwd`（交互式）或加 `--generate`（生成随机口令）产出。明文口令不写进任何文件、不进仓库。`AUTH_SESSION_SECRET` 是会话票据的签名密钥，用 `python -m app.auth.passwd --secret` 生成；**未配置时服务仍能启动**，但每次启动随机生成，重启即让所有人掉线，正式环境务必固定配置。`AUTH_SESSION_TTL_SECONDS`（会话有效期，默认 12 小时）。`AUTH_COOKIE_SECURE` 仅在 HTTPS 下置为 `true`，本地开发是 http，置 true 会导致登录后立刻掉线。鉴权配置有问题时启动日志会逐条告警，登录后的 `GET /api/auth/status` 也能看到同一份清单。
+- **用户登录（V0.5.1 起）**的账号存在数据库 `users` 表里，**不由环境变量配置**（V0.5 的 `AUTH_USERS` 与 `AUTH_SESSION_SECRET` 已移除）。冷启动先跑 `cd backend && python -m app.auth.init_admin` 建管理员，容器内用 `docker compose -f docker/docker-compose.yml exec backend python -m app.auth.init_admin`，运维细节见 §4.1。登录态在 `sessions` 表里，`AUTH_SESSION_TTL_SECONDS`（会话有效期，默认 12 小时，每次访问顺延）与 `AUTH_SESSION_ABSOLUTE_TTL_SECONDS`（绝对上限，默认 7 天）控制时长。`AUTH_COOKIE_SECURE` 仅在 HTTPS 下置为 `true`，本地开发是 http，置 true 会导致登录后立刻掉线。**数据库里一个账号都没有时**，启动日志会告警且登录接口返回 503 并指明初始化脚本；登录后的 `GET /api/auth/status` 也能看到同一份告警。
 
 ## 3. 本地运行
 
@@ -76,26 +76,43 @@ docker compose -f docker/docker-compose.yml exec backend python -c "from app.con
 
 `storage_backend` 应为 `tos`，缺失列表应为 `[]`，否则说明 `backend/.env` 未生效，无需继续自检。
 
-## 4.1 账号运维（V0.5 起）
+## 4.1 账号运维（V0.5.1 起）
 
-本版没有注册机制，账号只能手工配置。三类常见操作：
+本版没有注册机制，账号存在数据库的 `users` 表里。**账号不由环境变量配置**，因此新增或改口令之后不需要重启后端。
 
-**新增一个用户**（在宿主机执行，输出直接粘进 `backend/.env` 的 `AUTH_USERS`）：
+**冷启动建管理员**（在 `backend` 目录执行，容器内则在 `backend` 容器里执行）：
 
 ```bash
-cd backend
-uv run python -m app.auth.passwd --generate   # 明文口令打到 stderr，哈希打到 stdout
+python -m app.auth.init_admin
+# 管理员用户名（直接回车使用 admin）：
+# 管理员密码：        ← 不回显
+# 再次输入密码：      ← 不回显
+# 管理员 admin 创建成功，界面称呼为「管理员」。
 ```
 
-多个用户以逗号分隔，可带显示名：`AUTH_USERS=alice:<哈希>:爱丽丝,bob:<哈希>`。改完重启后端生效。
+脚本自己建表，数据库是空的也能直接跑。
 
-**改口令**：重新生成一份哈希替换掉原条目即可，账号名不变。**换完之后旧登录态不会自动失效**——票据签名里没有口令指纹，需要一并更换 `AUTH_SESSION_SECRET` 才能立刻把所有人踢下线（代价是全员重登）。
+**查看已有账号**：`python -m app.auth.init_admin --list`。输出只有账号、角色、显示名与上次登录时间，不含明文口令与哈希。
 
-**忘记口令**：本版没有找回入口。用 `--generate` 生成新口令并替换该账号的哈希。
+**改口令**：再跑一次同名账号的初始化脚本。脚本会说明该账号已存在并单独问一次是否重设，答 `y` 才动手；`--force` 跳过询问（供脚本使用）。**重设口令会顺带作废该账号的全部旧会话**，需要重新登录——这正是把账号收进数据库要换来的性质，V0.5 那时改完口令旧登录态仍然有效。
+
+**非交互建号**（测试环境与自动化）：
+
+```bash
+python -m app.auth.init_admin --username admin --password '<口令>' --display-name 管理员
+```
+
+`--password` 会在 shell 历史里留痕，人工操作请用交互模式。
+
+**忘记口令**：本版没有找回入口，用上面的重设路径。
 
 **锁定了账号**：同一账号 1 分钟内连续失败 5 次会被拒绝直到窗口滑过（错误文案是「登录尝试过于频繁」）。这是进程内计数，重启后端即清空。阈值集中在 `backend/app/auth/service.py` 的 `FAILURE_WINDOW_SECONDS` / `FAILURE_LIMIT`。
 
-**部署到 HTTPS 时**把 `AUTH_COOKIE_SECURE` 置为 `true`，否则会话票据会在明文连接上传输。nginx 反代已透传 `Host`，后端据此校验写请求的 `Origin` 同源；若外层还有一层网关改写了 Host，需要一并转发 `X-Forwarded-Host`，否则写操作会返回 403。
+**登录报「服务端尚未创建任何账号」**：数据库里一条账号记录都没有（冷启动的正常状态，不是故障）。执行一次 `python -m app.auth.init_admin` 即可。
+
+**会话的存放与清理**：登录态在 `sessions` 表里，Cookie 只携带令牌，服务端保存的是它的 SHA-256 摘要。有效期默认 12 小时、每次访问顺延，绝对上限 7 天（`AUTH_SESSION_TTL_SECONDS` / `AUTH_SESSION_ABSOLUTE_TTL_SECONDS`）。过期记录在撞上时即时删除，服务启动时再扫一遍，不需要定时任务。**要踢掉某个账号的全部会话**，改一次口令即可，不必再换签名密钥。
+
+**部署到 HTTPS 时**把 `AUTH_COOKIE_SECURE` 置为 `true`，否则会话令牌会在明文连接上传输。nginx 反代已透传 `Host`，后端据此校验写请求的 `Origin` 同源；若外层还有一层网关改写了 Host，需要一并转发 `X-Forwarded-Host`，否则写操作会返回 403。
 
 ## 5. 对象存储连通自检（测试环境）
 

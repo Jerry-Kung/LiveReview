@@ -38,13 +38,13 @@ def test_endpoint_rejects_anonymous(anonymous_client, method, path):
 
 
 @pytest.mark.parametrize(("method", "path"), PROTECTED_ENDPOINTS)
-def test_endpoint_rejects_forged_cookie(anonymous_client, method, path):
-    """伪造的票据同样不许通行：签名与有效期都要真的验过，而不是只看 Cookie 存在。"""
-    from app.auth import session as ticket
+def test_endpoint_rejects_forged_token(anonymous_client, method, path):
+    """伪造的令牌同样不许通行：必须真的到库里查过，而不是只看 Cookie 存在。"""
+    from app.auth import session as token_module
 
-    anonymous_client.cookies.set(ticket.COOKIE_NAME, "forged.ticket.value")
+    anonymous_client.cookies.set(token_module.COOKIE_NAME, "forged-token-value")
     resp = anonymous_client.request(method, path)
-    assert resp.status_code == 401, f"{method} {path} 接受了一张伪造票据"
+    assert resp.status_code == 401, f"{method} {path} 接受了一张伪造令牌"
 
 
 @pytest.mark.parametrize(("method", "path"), PROTECTED_ENDPOINTS)

@@ -1,4 +1,4 @@
-"""业务数据模型：上传会话与处理任务。
+"""业务数据模型：账号与会话、上传会话与处理任务。
 
 本模块只声明表结构，不含业务规则；状态流转的合法取值集中在 `app/upload.py`
 与 `app/tasks/` 中，避免常量散落。
@@ -9,9 +9,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -63,6 +65,78 @@ REVIEW_SKIPPED = REVIEW_STATUS_SKIPPED
 TERMINAL_REVIEW_STATUSES: frozenset[str] = frozenset(
     {REVIEW_STATUS_SUCCEEDED, REVIEW_STATUS_FAILED}
 )
+
+
+# 账号角色（V0.5.1）：本版只有管理员一种，所有登录用户等价。这个列先落在库里，
+# 让后续加只读账号时只需补判定，不必再动表结构。
+ROLE_ADMIN = "admin"
+
+
+class User(Base):
+    """可登录的账号。口令只以哈希形式存在，明文不落库也不进日志。
+
+    V0.5.1 起账号是访问系统的唯一凭据来源：不再从环境变量读用户，`.env` 里也就没有
+    一份需要与人手同步的账号清单——那正是「改了配置忘了重启」这类问题的来源。
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 账号唯一：登录按账号查人，重复会让「登录到哪一个」变得不确定
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str] = mapped_column(String(64), default="")
+    role: Mapped[str] = mapped_column(String(16), default=ROLE_ADMIN, server_default=ROLE_ADMIN)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    # 上一次登录成功的时间：供运维核对「这个号还在用吗」，不参与鉴权判定
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    sessions: Mapped[list["UserSession"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class UserSession(Base):
+    """一次登录产生的会话，是 V0.5 那份无状态签名票据的替代品。
+
+    为什么改回有状态（V0.5 的取舍见 `specs/v0.5-design.md`）：本版要兑现「单独踢掉一个
+    账号的会话」「改口令后旧会话立即失效」——这两件事都要求服务端留一份可撤销的记录，
+    签名票据做不到，只能靠换密钥把人全部踢下线。
+
+    令牌本身不入库，只存 SHA-256 摘要：拿到数据库文件也换不出一个可用的会话。
+    令牌是高熵随机串（不是口令），没有字典可猜，因此摘要不必加盐、不必用慢哈希。
+
+    过期为两段：`expires_at` 随每次访问顺延（滑动续期），`absolute_expires_at` 是从
+    签发起算的硬上限。只有滑动没有上限，等于一次登录永久有效；只有上限没有滑动，
+    连续工作一天会被中途要求重新登录。
+    """
+
+    __tablename__ = "sessions"
+
+    # 主键即令牌摘要（十六进制小写），查会话就是按主键命中，不需要额外索引
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # 最近一次带着这张令牌来的时间：滑动续期的写入节流据此判断「这次值不值得写」
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # 登录时的来源信息，只作排查线索：不参与鉴权，也不构成安全边界
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
+# 过期会话的清理按到期时间扫描，这是这张表上唯一的批量查询路径
+Index("ix_sessions_expires_at", UserSession.expires_at)
 
 
 class UploadSession(Base):

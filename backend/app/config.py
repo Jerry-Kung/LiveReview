@@ -5,8 +5,6 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.auth.config import AuthUser, parse_users
-from app.auth.session import generate_secret, secret_is_weak
 from app.llm.base import LLMConfig
 from app.storage.base import StorageConfig
 
@@ -21,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.5.0"
+    app_version: str = "0.5.1"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"
@@ -94,14 +92,13 @@ class Settings(BaseSettings):
     # 中文按「1 汉字 ≈ 1 token」估算，20000 字约 2 万 token，留足输出与系统提示的余量
     review_input_chars_per_call: int = 20000
 
-    # 用户登录（V0.5）：无注册机制，初始化用户直接写在环境变量里。
-    # 格式为逗号分隔的 `账号:口令哈希[:显示名]`，哈希用 `python -m app.auth.passwd` 生成。
-    auth_users: str | None = None
-    # 会话票据的签名密钥。留空则每次启动随机生成——开发可用，但重启即全员掉线。
-    # 换掉这把密钥等价于「立即失效所有已签发的票据」（见 app/auth/session.py）。
-    auth_session_secret: str | None = None
-    # 会话有效期（秒）：默认 12 小时，覆盖一个工作日的连续使用
+    # 用户登录（V0.5.1）：账号存在数据库的 `users` 表里，不再从环境变量读取。
+    # 建号用 `python -m app.auth.init_admin`（冷启动）或 `--list` 查看已有账号。
+    # 会话有效期（秒）：默认 12 小时，每次访问顺延，但总时长不超过下面的绝对上限
     auth_session_ttl_seconds: int = 12 * 3600
+    # 会话的绝对有效期（秒）：默认 7 天。滑动续期没有上限就等于一次登录永久有效，
+    # 这一项是它的天花板——超过这个时间必须重新登录
+    auth_session_absolute_ttl_seconds: int = 7 * 24 * 3600
     # 仅 HTTPS 下发送会话 Cookie：本地开发为 http，须保持关闭，部署到 HTTPS 时打开
     auth_cookie_secure: bool = False
 
@@ -160,60 +157,36 @@ class Settings(BaseSettings):
             review_max_attempts=self.review_max_attempts,
         )
 
-    # ---- 用户登录（V0.5）----
+    # ---- 用户登录（V0.5.1）----
 
-    @property
-    def auth_user_map(self) -> dict[str, AuthUser]:
-        """解析 `AUTH_USERS` 得到的账号映射。
+    def auth_account_state(self) -> tuple[int, str | None]:
+        """账号数量与需要提醒的问题，供启动告警与 `GET /api/auth/status` 共用。
 
-        每次访问重新解析而不是缓存：解析本身是字符串切分，开销可忽略，而缓存会引入
-        「配置改了但映射还是旧的」这类只会在热更新路径上暴露的问题。配置写坏时抛
-        `AuthConfigError`——调用点集中在启动校验与登录接口，两处都会把它变成明确报错。
+        查库失败时不抛异常：状态查询与启动日志都不该因为数据库暂时不可用而中断，
+        这与 `check_database_ok()` 的处理方式一致。返回的 `None` 表示「查不到」，
+        与「确实一个账号都没有」是两件事，因此不用 0 表示失败。
         """
-        return parse_users(self.auth_users)
+        from app.auth import store
+        from app.database import SessionLocal
 
-    @property
-    def auth_users_configured(self) -> bool:
-        return bool(self.auth_user_map)
+        db = SessionLocal()
+        try:
+            total = store.count_users(db)
+        except Exception:  # noqa: BLE001 —— 告警路径不因数据库异常而中断启动
+            logger.exception("读取账号数量失败")
+            return 0, "无法读取账号表：请确认数据库可用，并执行 python -m app.auth.init_admin 建号"
+        finally:
+            db.close()
 
-    @property
-    def auth_session_secret_configured(self) -> bool:
-        """是否显式配置了签名密钥。未配置时服务仍可运行，但重启会让登录态全部失效。"""
-        return bool((self.auth_session_secret or "").strip())
-
-    @property
-    def auth_session_secret_value(self) -> str:
-        """实际用于签名的密钥：配置了就用配置，否则生成一把随机的兜底。
-
-        兜底值通过 `lru_cache` 固定在同一进程的多次访问上——若每次访问都重新随机，
-        签发与校验会用两把不同的密钥，登录永远不通过。
-        """
-        configured = (self.auth_session_secret or "").strip()
-        if configured:
-            return configured
-        return _fallback_secret()
+        if total == 0:
+            return 0, "没有任何账号可登录：请执行 python -m app.auth.init_admin 创建管理员"
+        return total, None
 
     @property
     def auth_warnings(self) -> list[str]:
         """启动时的鉴权配置告警；不回显任何取值。"""
-        warnings: list[str] = []
-        if not self.auth_users_configured:
-            warnings.append("AUTH_USERS 未配置：没有任何账号可登录，请先生成口令哈希并写入环境变量")
-        if not self.auth_session_secret_configured:
-            warnings.append(
-                "AUTH_SESSION_SECRET 未配置：本次使用随机密钥，服务重启后所有登录态失效"
-            )
-        elif secret_is_weak(self.auth_session_secret or ""):
-            warnings.append("AUTH_SESSION_SECRET 过短（少于 16 字节），签名强度不足，建议重新生成")
-        return warnings
-
-
-@lru_cache
-def _fallback_secret() -> str:
-    """未配置 AUTH_SESSION_SECRET 时的进程内兜底密钥。"""
-    secret = generate_secret()
-    logger.warning("AUTH_SESSION_SECRET 未配置，已生成临时签名密钥（重启后失效）")
-    return secret
+        _, problem = self.auth_account_state()
+        return [problem] if problem else []
 
 
 @lru_cache

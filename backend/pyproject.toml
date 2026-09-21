@@ -20,3 +20,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    # 该用例要读未经测试夹具改动的原始取值（如口令哈希的真实迭代次数）
+    "original: 跳过 conftest 的 fast_password_hashing 打桩",
+]

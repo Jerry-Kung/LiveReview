@@ -19,7 +19,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **`backend/app/llm/`**：模型接入。`base.py` 定义契约与领域异常，`client.py` 为基于 OpenAI 兼容接口的实现（视频理解走 `responses`，复盘走 `chat.completions`），`prompts.py` / `review_prompts.py` 为两条链路的提示词，`parsing.py` 为模型输出的解析、时间对齐与复盘结论归一；业务代码只依赖本包，不接触模型厂商 SDK。
 - **`backend/app/transcript.py`**：识别结果汇总。对外给两份产物：人工核对用的整场全文（接口与导出）与复盘节点用的输入文本（带时间戳与语气标注，按记录边界分批）；被 `routers/understanding.py` 与 `tasks/review.py` 调用。
 - **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针（公开），`auth.py` 承载登录、退出与当前身份，`uploads.py`、`tasks.py`、`understanding.py` 与 `review.py` 面向前端（统一 `/api` 前缀，整组要求登录）。
-- **`backend/app/auth/`**：用户鉴权。`config.py` 解析环境变量里的初始化用户，`password.py` 做 PBKDF2 单向校验，`session.py` 签发与校验签名票据，`service.py` 比对凭据并按账号节流失败次数，`passwd.py` 是生成口令哈希与签名密钥的命令行工具，`__init__.py` 是对外的 FastAPI 依赖与 Cookie 读写。
+- **`backend/app/auth/`**：用户鉴权。`store.py` 是 `users` / `sessions` 两张表的唯一读写点（账号存取、会话签发与撤销），`password.py` 做 PBKDF2 单向校验，`session.py` 定 Cookie 名与令牌的生成、摘要，`service.py` 比对凭据并按账号节流失败次数，`init_admin.py` 是冷启动建号与改口令的命令行脚本，`passwd.py` 是生成、校验口令哈希的命令行工具，`__init__.py` 是对外的 FastAPI 依赖与 Cookie 读写。
 - **`backend/app/storage/`**：对象存储的契约与实现，详见下节。
 - **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（登录门槛 + 页眉 + 侧栏 + 工作区），`LoginPage.tsx` 是未登录时的整屏登录页，`session.ts` 是当前身份的唯一起点，`Header.tsx` 承载品牌、搜索与账号区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `Understanding.tsx` / `Review.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。历史记录读既有任务列表接口，账号隔离尚未实现（V0.5 的用户只用于访问控制，不切分数据）。
 
@@ -66,6 +66,16 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **对象键约定**：`{TOS_OBJECT_PREFIX}{kind}/{文件名主体}_{毫秒时间戳}_{8位随机串}{扩展名}`；`kind` 区分用途（`original` 原始视频、`clip` 切片）。
 - **凭据约束**：AK/SK 仅从环境变量读取，不落代码、不落仓库、不进日志；预签名 URL 同样不进日志。
 - **异常约定**：SDK 异常在实现内统一映射为 `StorageClientError` / `StorageServerError`；服务端错误保留 `code`、`request_id`、`status_code`，`request_id` 写入日志用于向服务商定位问题。
+
+## 用户鉴权（V0.5 起）
+
+- **职责**：判定「谁能访问」。业务路由整组挂在 `require_user` 依赖上，逐端点自己解析 Cookie 的情况不存在。
+- **账号（V0.5.1 起入库）**：`users` 表保存账号、口令哈希与显示名，数据库是账号的唯一来源——**不由环境变量配置**。V0.5 的 `AUTH_USERS` 与签名密钥 `AUTH_SESSION_SECRET` 已移除：前者让账号清单需要在人与配置之间手工同步，后者是为了作废票据才不得不留的开关。
+- **登录态（V0.5.1 起入库）**：`sessions` 表保存会话，Cookie 只携带随机令牌，库里存的是它的 SHA-256 摘要。有效期分两段：`expires_at` 随访问顺延（默认 12 小时），`absolute_expires_at` 是硬上限（默认 7 天）。
+- **为什么是有状态**：撤销。要「退出即失效」「改口令作废旧会话」「停用账号立刻踢下线」，服务端就必须留一份可撤销的记录。V0.5 用无状态签名票据避开了会话表的过期清理与并发写，代价正是这些能力——取舍与变更理由见 `specs/v0.5.1-design.md`。
+- **代价**：每个请求多一次主键查询（V0.5 的票据只需验签）。在本版的量级（单实例、个位数账号、SQLite）不构成瓶颈。
+- **CSRF**：`SameSite=Lax` 加写操作的 `Origin` 同源校验；无 `Origin` 的请求放行（那是 curl 与脚本发出的，本就拿不到 Cookie）。
+- **建号**：`python -m app.auth.init_admin`（交互式；`--list` 查看、`--force` 非交互重设）。本版没有注册、改口令界面、角色与权限，也没有用户隔离——所有登录用户看到同一套任务数据。
 
 ## 外部依赖
 

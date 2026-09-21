@@ -22,14 +22,33 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # 建表在启动时完成：V0 阶段表结构仍在演进，不引入迁移工具
     init_db()
-    # 鉴权配置的问题（未配置用户、签名密钥未设置或过短）在启动日志里说清楚，
-    # 否则「没有任何账号能登录」只能靠翻文档才知道
+    # 过期会话在每次撞上时会被即时删除，但「登录过一次就再没回来」的那些没人去撞，
+    # 启动时顺手清一遍即可，不需要额外的定时任务
+    _purge_expired_sessions()
+    # 鉴权状态的问题（数据库里一个账号都没有）在启动日志里说清楚，
+    # 否则「服务起来了但没人能登录」只能靠翻文档才知道
     for warning in get_settings().auth_warnings:
         logger.warning("鉴权配置：%s", warning)
     # 进程重启后在途任务已丢失，把待处理任务重新入队
     tasks.requeue_pending()
     yield
     tasks.shutdown()
+
+
+def _purge_expired_sessions() -> None:
+    """清掉已过期的会话记录。失败只记日志：这是清理动作，不该拦住服务启动。"""
+    from app.auth import store
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        removed = store.purge_expired_sessions(db)
+        if removed:
+            logger.info("已清理 %d 条过期会话", removed)
+    except Exception:  # noqa: BLE001 —— 清理失败不影响服务可用性
+        logger.exception("清理过期会话失败")
+    finally:
+        db.close()
 
 
 # 版本号统一取自配置，避免文档与接口各写一份造成漂移

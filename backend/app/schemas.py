@@ -320,8 +320,8 @@ class SessionResponse(BaseModel):
 class StatusResponse(BaseModel):
     """登录后可见的运行配置状态。
 
-    缺失项只给名称，不给取值；`auth_warnings` 是启动时鉴权配置的问题清单（如未配置
-    签名密钥），让人在界面上就能看见「重启会掉线」这类隐患。
+    缺失项只给名称，不给取值；`auth_warnings` 是启动时鉴权状态的问题清单（如数据库里
+    一个账号都没有），让人在界面上就能看见「服务起来了但没人能登录」这类隐患。
     """
 
     version: str
@@ -332,5 +332,4 @@ class StatusResponse(BaseModel):
     llm: str
     llm_missing: list[str] = Field(default_factory=list)
     auth_users: int
-    auth_session_secret_configured: bool
     auth_warnings: list[str] = Field(default_factory=list)

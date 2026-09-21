@@ -4,11 +4,15 @@
 
 两道防线：
 
-1. **登录态**：`require_user` 从 Cookie 取签名票据，验签并检查有效期，未通过一律 401。
+1. **登录态**：`require_user` 从 Cookie 取令牌，到 `sessions` 表查证并检查有效期，
+   未通过一律 401。令牌无效、会话过期、账号已删除走同一条拒绝路径。
 2. **CSRF**：写操作（非 GET/HEAD/OPTIONS）校验 `Origin` 是否与请求自身的 Host 同源。
    Cookie 是浏览器自动携带的凭证，`SameSite=Lax` 已能挡住跨站的表单与 fetch，
    但同站子域或放宽策略时仍会被利用，因此对写操作再加一条同源检查。
    没有 `Origin` 的请求放行——那是非浏览器客户端（curl、脚本）发出的，它们本就不带 Cookie。
+
+会话查证每次请求都要读一次库（V0.5 的签名票据不需要），这是把会话收进数据库的代价，
+换来的是「能单独撤销一张会话」。SQLite 上的主键查询在这个量级不构成瓶颈。
 """
 
 from __future__ import annotations
@@ -19,7 +23,8 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request, Response, status
 
-from app.auth import session as session_ticket
+from app.auth import session as session_cookie
+from app.auth import store
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +35,9 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 def _settings():
     """取应用配置。
 
-    在函数内导入而不是在模块顶层：`app.config` 要读本包来派生鉴权字段（用户映射、
-    签名密钥、启动告警），顶层互相导入会形成环——谁先被导入谁就拿到半成品模块，
-    表现为 `cannot import name 'Settings' from partially initialized module`。
+    在函数内导入而不是在模块顶层：`app.config` 要读本包来派生鉴权字段（会话有效期、
+    启动告警），顶层互相导入会形成环——谁先被导入谁就拿到半成品模块，表现为
+    `cannot import name 'Settings' from partially initialized module`。
 
     换成构造期注入（`Depends(get_settings)`）也解决不了：依赖注入要求配置对象本身
     已经能构造，而构造它正需要本包，环还在。
@@ -42,12 +47,26 @@ def _settings():
     return get_settings()
 
 
+def _db_session():
+    """打开一个数据库会话，供鉴权依赖自行使用。
+
+    鉴权依赖不通过 `Depends(get_db)` 注入：它挂在整组业务路由上，而各路由自己也要
+    拿 `get_db`，两者共用同一个会话对象会让「鉴权阶段提交了事务」与「业务阶段的事务」
+    纠缠在一起。这里各开一个连接，职责清楚，代价是一次连接开销。
+    """
+    from app.database import SessionLocal
+
+    return SessionLocal()
+
+
 @dataclass(frozen=True)
 class CurrentUser:
     """当前登录者。界面用它显示称呼；本版不做用户隔离，因此不参与数据查询条件。"""
 
+    user_id: int
     username: str
     display_name: str
+    role: str
 
 
 def _is_same_origin(request: Request) -> bool:
@@ -83,33 +102,47 @@ async def require_trusted_origin(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="请求来源不被信任")
 
 
+def _unauthorized() -> HTTPException:
+    """统一的拒绝响应。会话不存在、过期、账号被删都走这一条。"""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="登录状态已失效，请重新登录",
+    )
+
+
+def read_session_token(request: Request) -> str | None:
+    return request.cookies.get(session_cookie.COOKIE_NAME)
+
+
 def require_user(request: Request) -> CurrentUser:
-    """路由依赖：未登录、票据无效或来源不可信时拒绝。"""
+    """路由依赖：未登录、令牌无效、会话过期或来源不可信时拒绝。"""
     if not origin_allowed(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="请求来源不被信任")
+
     settings = _settings()
-    username = session_ticket.verify(
-        settings.auth_session_secret_value,
-        request.cookies.get(session_ticket.COOKIE_NAME),
-        max_age_seconds=settings.auth_session_ttl_seconds,
-    )
-    if not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录状态已失效，请重新登录",
+    token = read_session_token(request)
+    db = _db_session()
+    try:
+        resolved = store.resolve_session(
+            db,
+            token,
+            ttl_seconds=settings.auth_session_ttl_seconds,
         )
-    user = settings.auth_user_map.get(username)
-    # 票据有效但账号已从配置里摘掉：等同于未登录，不能让旧票据继续通行
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="登录状态已失效，请重新登录",
+        if resolved is None:
+            raise _unauthorized()
+        user = resolved.user
+        return CurrentUser(
+            user_id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            role=user.role,
         )
-    return CurrentUser(username=user.username, display_name=user.display_name)
+    finally:
+        db.close()
 
 
-def set_session_cookie(response: Response, settings, username: str) -> None:
-    """把票据写进 Cookie。
+def set_session_cookie(response: Response, settings, token: str) -> None:
+    """把令牌写进 Cookie。
 
     - `httponly`：脚本读不到，XSS 也偷不走。
     - `samesite=lax`：跨站发起的写请求不带这张 Cookie，是 CSRF 的第一道防线。
@@ -117,8 +150,8 @@ def set_session_cookie(response: Response, settings, username: str) -> None:
       强制 secure 会导致登录后立刻掉线，因此默认关、部署到 HTTPS 时打开。
     """
     response.set_cookie(
-        key=session_ticket.COOKIE_NAME,
-        value=session_ticket.issue(settings.auth_session_secret_value, username),
+        key=session_cookie.COOKIE_NAME,
+        value=token,
         max_age=settings.auth_session_ttl_seconds,
         httponly=True,
         samesite="lax",
@@ -128,5 +161,5 @@ def set_session_cookie(response: Response, settings, username: str) -> None:
 
 
 def clear_session_cookie(response: Response) -> None:
-    """退出登录：删除 Cookie。服务端无状态，删除即失效。"""
-    response.delete_cookie(key=session_ticket.COOKIE_NAME, path="/")
+    """退出登录：删除 Cookie。服务端那一行由调用方另行删除。"""
+    response.delete_cookie(key=session_cookie.COOKIE_NAME, path="/")

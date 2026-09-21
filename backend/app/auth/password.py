@@ -1,8 +1,9 @@
 """口令哈希：只做单向推导与校验，不保存明文。
 
-V0.5 的用户是后端手工配置的，因此这里只提供「生成一份可写进配置的哈希」与
-「校验候选口令」两件事，不引入第三方口令库——标准库的 `hashlib.pbkdf2_hmac`
-足以覆盖本阶段的需求，少一个依赖就少一处需要跟进的供应链风险。
+这里只提供「把明文口令变成一份可入库的哈希」与「校验候选口令」两件事，不引入第三方
+口令库——标准库的 `hashlib.pbkdf2_hmac` 足以覆盖本阶段的需求，少一个依赖就少一处需要
+跟进的供应链风险。存储位置是数据库的 `users.password_hash`（写入路径见
+`app/auth/store.py` 与 `app/auth/init_admin.py`）。
 
 存储格式（自描述，便于日后换算法而不必迁移数据）：
 
@@ -23,7 +24,7 @@ ALGORITHM = "pbkdf2_sha256"
 
 
 def hash_password(password: str, *, iterations: int = DEFAULT_ITERATIONS) -> str:
-    """生成可写进 `AUTH_USERS` 的哈希串。"""
+    """生成一份可写入 `users.password_hash` 的哈希串。"""
     if not password:
         raise ValueError("口令不能为空")
     salt = secrets.token_bytes(SALT_BYTES)
@@ -34,8 +35,8 @@ def hash_password(password: str, *, iterations: int = DEFAULT_ITERATIONS) -> str
 def verify_password(password: str, encoded: str) -> bool:
     """校验候选口令是否匹配哈希串。
 
-    任何格式问题都返回 False 而不是抛异常：配置写坏与口令不对，对调用方是同一件事
-    ——这次登录不通过；把异常留给启动时的配置校验去报，登录路径不据此泄露细节。
+    任何格式问题都返回 False 而不是抛异常：库里那行哈希写坏了与口令不对，对调用方是
+    同一件事——这次登录不通过；把异常留给建号脚本去报，登录路径不据此泄露细节。
     """
     try:
         algorithm, raw_iterations, raw_salt, raw_digest = encoded.split("$")
