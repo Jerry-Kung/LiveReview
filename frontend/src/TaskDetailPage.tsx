@@ -32,6 +32,7 @@ import {
   formatBytes,
   formatMoment,
   formatResolution,
+  taskDisplayStatus,
   taskStatusLabel,
   taskStatusTone,
 } from "./format";
@@ -141,8 +142,10 @@ export default function TaskDetail({
         <div className="detail-head-main">
           <div className="detail-title-row">
             <h2 className="detail-title">{task.filename ?? "未命名录屏"}</h2>
-            <span className="status" data-tone={taskStatusTone(task.status)}>
-              {taskStatusLabel(task.status)}
+            {/* 头部的状态报的是这条任务整体跑到哪了：切分完成不等于任务完成，
+                识别与复盘在跑时显示「分析中」（见 `taskDisplayStatus`）。 */}
+            <span className="status" data-tone={taskStatusTone(taskDisplayStatus(task))}>
+              {taskStatusLabel(taskDisplayStatus(task))}
             </span>
             {/* 全自动流程模式的任务快照（V0.7.0）：这条任务创建时开关是开着的。
                 读的是任务上的快照而不是当前设置——改开关不改变已创建任务的行为，

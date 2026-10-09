@@ -860,6 +860,70 @@ describe("工作台壳层", () => {
     expect(screen.getByLabelText("媒体信息")).toBeInTheDocument();
   });
 
+  /** 识别/复盘进行中的任务：切分链已是终态，但任务整体还没完。 */
+  const withUnderstanding = (status: string) => ({
+    ...taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })]),
+    understanding: {
+      status,
+      progress: status === "running" ? 40 : 100,
+      clip_count: 1,
+      segment_count: 2,
+      failed_clip_count: 0,
+      error: null,
+      started_at: "2026-01-01T00:20:00Z",
+      finished_at: status === "running" ? null : "2026-01-01T00:26:00Z",
+      model_name: "test-model",
+    },
+  });
+
+  it("切分完成但识别仍在跑时，侧栏不报「已完成」而是「分析中」", async () => {
+    // 回归（V0.7.2）：`task.status` 只描述切分链，切分一结束就是 succeeded。
+    // 侧栏若直接读它，识别与复盘还在跑的任务会被报成「已完成」。
+    const running = withUnderstanding("running");
+    mockApi([healthRoute], [running]);
+
+    await renderApp();
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    expect(item).toHaveTextContent("分析中");
+    expect(item).not.toHaveTextContent("已完成");
+  });
+
+  it("识别与复盘都收尾后，侧栏才回到「已完成」", async () => {
+    const settled = {
+      ...withUnderstanding("succeeded"),
+      review: {
+        status: "succeeded",
+        progress: 100,
+        clip_count: 1,
+        segment_count: 2,
+        batch_count: 1,
+        error: null,
+        started_at: "2026-01-01T00:30:00Z",
+        finished_at: "2026-01-01T00:32:00Z",
+        model_name: "test-model",
+        warnings: [],
+        result: null,
+      },
+    };
+    mockApi([healthRoute], [settled]);
+
+    await renderApp();
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    expect(item).toHaveTextContent("已完成");
+  });
+
+  it("切分链自身还在跑时，侧栏报的是切分链的状态", async () => {
+    // 派生只在切分结束时接管：处理中的任务不该被报成「分析中」
+    mockApi([healthRoute], [taskResponse("processing")]);
+
+    await renderApp();
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    expect(item).toHaveTextContent("处理中");
+  });
+
   it("没有任务时给出空态说明", async () => {
     mockApi([healthRoute], []);
     await renderApp();

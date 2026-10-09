@@ -20,9 +20,18 @@
  */
 
 import type { Task } from "./api";
-import { PLACEHOLDER, taskStatusLabel, taskStatusTone } from "./format";
+import { PLACEHOLDER, taskDisplayStatus, taskStatusLabel, taskStatusTone } from "./format";
 import { IconChart, IconList, IconSettings, IconUsers } from "./icons";
 import type { NavKey } from "./routing";
+
+/**
+ * 侧栏那行状态文案读的是**整体进度**而不是切分链：`task.status` 在切分完成时就变成
+ * `succeeded`，而识别与复盘此时可能刚入队（V0.7.2）。合成规则见 `taskDisplayStatus`。
+ */
+export function taskStatusText(task: Task): { label: string; tone: "ok" | "busy" | "warn" | "error" } {
+  const status = taskDisplayStatus(task);
+  return { label: taskStatusLabel(status), tone: taskStatusTone(status) };
+}
 
 /** 侧栏筛选：文件名是用户手里唯一认得出的标识，因此只按文件名匹配。 */
 export function filterTasks(tasks: Task[], query: string): Task[] {
@@ -123,7 +132,9 @@ export default function Sidebar({
 
         {!loading && error === null && visible.length > 0 && (
           <ul className="rail-list">
-            {visible.map((task) => (
+            {visible.map((task) => {
+              const status = taskStatusText(task);
+              return (
               <li key={task.id}>
                 <button
                   type="button"
@@ -133,14 +144,15 @@ export default function Sidebar({
                 >
                   <span className="recent-name">{task.filename ?? "未命名录屏"}</span>
                   <span className="recent-meta">
-                    <span className="status" data-tone={taskStatusTone(task.status)}>
-                      {taskStatusLabel(task.status)}
+                    <span className="status" data-tone={status.tone}>
+                      {status.label}
                     </span>
                     <span className="recent-stamp num">{formatStamp(task.created_at)}</span>
                   </span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>

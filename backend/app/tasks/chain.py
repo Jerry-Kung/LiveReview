@@ -165,8 +165,26 @@ def _to_review(db: Session, task: Task) -> str | None:
     return _enqueue(db, task, TASK_KIND_REVIEW)
 
 
+def _mark_running(task: Task, phase: str) -> None:
+    """提交前先把下一阶段落成「进行中」。
+
+    `submit()` 只把任务交给线程池，不等工作线程接管；任务体要等被接管才写状态。不补这一笔
+    的话，「已入队、还没开始」这段窗口里库里仍是上一阶段的终态——界面据此显示「已完成」，
+    可这条任务明明还要继续跑（V0.7.2）。
+
+    取值与手工入队接口（`app/routers/understanding.py`、`app/routers/review.py`）和任务体
+    共用 `Task.mark_*_running()`，三条入口不会漂移。副作用也一致：本次尝试的进度、错误与
+    结束时间归零，计数类字段由任务体按真实输入重算。
+    """
+    if phase == TASK_KIND_UNDERSTAND:
+        task.mark_understanding_running()
+    elif phase == TASK_KIND_REVIEW:
+        task.mark_review_running()
+
+
 def _enqueue(db: Session, task: Task, phase: str) -> str:
     """把下一阶段交给执行器，并把补跑计数归零（计数描述的是「正在跑的这个阶段」）。"""
+    _mark_running(task, phase)
     task.auto_retries = 0
     db.commit()
     from app.tasks.executor import submit
@@ -178,6 +196,7 @@ def _enqueue(db: Session, task: Task, phase: str) -> str:
 
 def _retry(db: Session, task: Task, phase: str, label: str) -> str:
     """自动补跑一次同一阶段：计数加一后重新入队。"""
+    _mark_running(task, phase)
     task.auto_retries = (task.auto_retries or 0) + 1
     db.commit()
     from app.tasks.executor import submit
