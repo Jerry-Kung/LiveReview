@@ -71,6 +71,8 @@ def _to_response(task: Task, settings: Settings) -> TaskResponse:
         # 过期是独立字段而不是一种 status：`status` 只描述切分链（V0.1.5 起的既有约定）
         expired_at=task.video_expired_at,
         video_expired=task.video_expired,
+        # 创建时的全自动模式快照（V0.7.0）：详情页据此标注，改开关不影响它
+        auto_run=bool(task.auto_run),
     )
 
 

@@ -31,6 +31,7 @@ from app.tasks.runner import (
     reclaim_stale_processing,
     run_task,
 )
+from app.tasks.chain import advance, sweep_pending
 from app.tasks.review import run_review
 from app.tasks.understanding import run_understanding
 
@@ -146,12 +147,22 @@ def run_sync(task_id: str, phase: str) -> None:
 
 
 def run(task_id: str, phase: str) -> None:
-    """线程池工作线程的入口：执行任务体并清掉在途记录。"""
+    """线程池工作线程的入口：执行任务体，清掉在途记录，再推进全自动链路。
+
+    推进放在 `run_sync` **之后**、`finally` 之前，理由是线程归属：`run_sync` 返回时任务体
+    已经跑完、阶段结论已落库，而本线程马上就要归还线程池——此时才提交下一阶段，不会出现
+    「任务体占着 worker 去 submit」那种自锁（线程池只有 `MAX_WORKERS` 个 worker，任务体自己
+    就占着一个，两个 worker 同时这么做就会双双阻塞在队列上，见 `app/tasks/chain.py` 顶部）。
+
+    `advance` 内部自己吞掉异常，因此这里不需要额外的 try。
+    """
     try:
         run_sync(task_id, phase)
     finally:
         with _lock:
             _futures.pop((phase, task_id), None)
+    # 阶段结束（成功或失败）都要问一次：要不要接着跑下一个阶段由 chain 判定
+    advance(task_id, from_phase=phase)
 
 
 def submit(task_id: str, phase: str = TASK_KIND_INGEST) -> None:
@@ -220,6 +231,11 @@ def requeue_pending() -> int:
         submit(task_id, TASK_KIND_REVIEW)
     if resumed_review:
         logger.info("启动时续跑 %d 个中断的复盘任务", len(resumed_review))
+
+    # 全自动链路的补扫（V0.7.0）放在最后：先让上面几类「在途被打断」的任务回到可推进状态，
+    # 补扫才看得到它们。补扫只认「上一阶段已结束、下一阶段从未动过」的任务，因此与上面
+    # 的续跑互不重叠——同一任务的同一阶段不会被入队两次。
+    sweep_pending()
 
     return len(pending) + len(resumed_understanding) + len(resumed_review) + recovered
 

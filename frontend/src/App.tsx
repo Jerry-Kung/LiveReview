@@ -5,26 +5,27 @@
  * 遮掩——工作台里的每个请求都要带会话 Cookie，后端会把未登录的请求一并拒掉，因此
  * 这里省掉的是一串注定失败的请求，而不是一次安全检查。真正的边界在后端。
  *
- * 主区按 hash 路由显示：新建任务页、从最近任务里打开的一条既有任务、账号管理页，以及
- * 两个预留功能页（数据分析 / 设置，本版没有后端能力，只给出说明页）。本业务链路始终是
+ * 主区按 hash 路由显示：新建任务页、从最近任务里打开的一条既有任务、账号管理页、设置页，
+ * 以及一个预留功能页（数据分析，本版没有后端能力，只给出说明页）。本业务链路始终是
  * 「上传 → 处理 → 结果」，路由只负责决定当前看哪一屏。
  *
- * 账号管理（V0.5.2）是唯一一处按角色决定可见性的地方。这里只是**界面收敛**：非管理员
- * 既看不到侧栏入口，手敲 `#/accounts` 也只会看到说明页；真正的边界在后端，那一组接口对
- * 非管理员一律 403，绕过界面直接调接口拿不到任何东西。
+ * 账号管理与设置页是两处按角色决定可见性的地方。这里只是**界面收敛**：非管理员既看不到
+ * 侧栏入口，手敲 `#/accounts` 或 `#/settings` 也只会看到说明页或不给可点的入口；真正的
+ * 边界在后端，那些接口对非管理员一律 403，绕过界面直接调接口拿不到任何东西。
  */
 
 import { useCallback, useEffect, useState } from "react";
 import AccountsPage from "./AccountsPage";
 import Header from "./Header";
 import LoginPage from "./LoginPage";
+import SettingsPage from "./SettingsPage";
 import Sidebar from "./Sidebar";
 import Workbench from "./Workbench";
-import { IconChart, IconSettings, IconUsers } from "./icons";
+import { IconChart, IconUsers } from "./icons";
 import { DEFAULT_SECTION, useRoute, type TaskSection } from "./routing";
 import { login } from "./session";
 import { useSession } from "./session";
-import { fetchTasks, type Task } from "./api";
+import { fetchSettings, fetchTasks, type Task } from "./api";
 
 /** 预留功能页：说明「这里会有什么、现在为什么没有」，不假装功能已存在。 */
 function PlaceholderPage({
@@ -55,6 +56,14 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  /**
+   * 全自动流程模式（V0.7.0）：只用于新建任务页右栏的说明文案。
+   *
+   * 在壳层读一次并作为事实往下传，而不是让 `Workbench` 自己读——上传页的文案只是一个展示
+   * 需求，而上传状态机本身不该多背一条会失败的请求。读失败时保持默认的关闭态：把手工流程
+   * 讲成手工流程只是多让用户点两个按钮，反过来会让人一直等一个不会出现的自动推进。
+   */
+  const [autoPipeline, setAutoPipeline] = useState(false);
   // 递增计数：新建上传任务时让 Workbench 重挂载，丢掉上一次任务的界面状态
   const [intakeKey, setIntakeKey] = useState(0);
   const { route, navigate } = useRoute();
@@ -82,6 +91,15 @@ export default function App() {
     // 挂在刚打开页面的用户脸上——他本来就没登录，不需要被通知会话过期
     if (authenticated) void loadTasks();
   }, [authenticated, loadTasks]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    // 设置读取失败不影响其它功能：保持默认的关闭态即可，不为此弹错误。
+    // 上传页的说明只是文案，不该因为它读不到就挡住上传。
+    void fetchSettings()
+      .then((value) => setAutoPipeline(value.auto_pipeline))
+      .catch(() => undefined);
+  }, [authenticated]);
 
   const handleNewTask = () => {
     setIntakeKey((value) => value + 1);
@@ -191,13 +209,7 @@ export default function App() {
               />
             ))}
 
-          {route.view === "settings" && (
-            <PlaceholderPage
-              title="设置"
-              note="账号与权限、切片时长、模型选择等运行参数。当前这些取值由后端配置文件决定，界面暂不提供修改入口。"
-              icon={<IconSettings size={20} />}
-            />
-          )}
+          {route.view === "settings" && <SettingsPage isAdmin={isAdmin} />}
 
           {(route.view === "new" || route.view === "task") && (
             <Workbench
@@ -207,6 +219,7 @@ export default function App() {
               onSection={handleSection}
               onTaskChange={loadTasks}
               onBackToList={handleNewTask}
+              autoPipeline={autoPipeline}
             />
           )}
         </main>

@@ -292,6 +292,9 @@ class TaskResponse(BaseModel):
     # 它的布尔视图，供前端一处判断。过期只影响视频，转写与复盘结论照常可用。
     expired_at: datetime | None = None
     video_expired: bool = False
+    # 全自动流程模式（V0.7.0）：这条任务**创建时**的开关快照，供详情页标注与费用追溯。
+    # 不是当前开关值——改开关不会改变已创建任务的既有行为。
+    auto_run: bool = False
 
 
 class TaskListResponse(BaseModel):
@@ -374,3 +377,29 @@ class StatusResponse(BaseModel):
     llm_missing: list[str] = Field(default_factory=list)
     auth_users: int
     auth_warnings: list[str] = Field(default_factory=list)
+
+
+# ---- 系统设置（V0.7.0）----
+
+
+class SettingsResponse(BaseModel):
+    """系统设置。读对所有登录账号开放，写只对管理员。
+
+    `auto_pipeline` 是唯一可改的项；其余字段是**只读的运行参数**，当前由环境变量决定，
+    放在这里是因为它们决定了「打开开关意味着什么」——用户需要知道全自动会按哪个模型、哪种
+    切片粒度花钱。模型未配置时 `model_name` 为 null 而 `llm_configured` 为假，界面据此
+    提示「开了也不会自动识别」。
+    """
+
+    auto_pipeline: bool
+    model_name: str | None = None
+    llm_configured: bool = False
+    split_max_duration_seconds: int
+    split_max_clip_bytes: int
+    video_ttl_seconds: int
+
+
+class SettingsUpdateRequest(BaseModel):
+    """修改系统设置。只带要改的字段，未提供的保持原值。"""
+
+    auto_pipeline: bool

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { resetPollIntervalMs, setPollIntervalMs } from "./polling";
-import { SESSION } from "./test/fixtures";
+import { SESSION, SETTINGS } from "./test/fixtures";
 
 const HEALTH = {
   status: "ok",
@@ -125,6 +125,8 @@ function mockApi(
     // 会话与任务列表都是壳层启动时就发的：默认给已登录 + 空列表，用例不必逐个声明
     if (url === "/api/auth/session") return jsonResponse(200, SESSION);
     if (url.startsWith("/api/tasks?")) return jsonResponse(200, { items: tasks });
+    // 壳层登录后会读一次设置（V0.7.0）：给默认的关闭态即可，本文件不验证文案切换
+    if (url === "/api/settings") return jsonResponse(200, SETTINGS);
     for (const route of routes) {
       const response = route(url, init);
       if (response) return response;

@@ -10,6 +10,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { MEMBER_SESSION, SESSION } from "./test/fixtures";
 
+/** 设置响应：默认关闭全自动流程模式，与后端默认值一致。 */
+const SETTINGS = {
+  auto_pipeline: false,
+  model_name: "test-model",
+  llm_configured: true,
+  split_max_duration_seconds: 3600,
+  split_max_clip_bytes: 1024 * 1024 * 1024,
+  video_ttl_seconds: 72 * 3600,
+};
+
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -18,8 +28,8 @@ function jsonResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
-/** 只覆盖登录门槛相关的请求：会话查询、登录、任务列表、账号列表。 */
-function mockApi(options: { session?: Response; accounts?: Response } = {}) {
+/** 只覆盖登录门槛相关的请求：会话查询、登录、任务列表、账号列表、设置。 */
+function mockApi(options: { session?: Response; accounts?: Response; settings?: Response } = {}) {
   const calls: string[] = [];
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -29,6 +39,8 @@ function mockApi(options: { session?: Response; accounts?: Response } = {}) {
     if (url === "/api/auth/logout") return jsonResponse(204, null);
     if (url.startsWith("/api/tasks?")) return jsonResponse(200, { items: [] });
     if (url === "/api/accounts") return options.accounts ?? jsonResponse(200, { items: [] });
+    // 壳层登录后会读一次设置（V0.7.0），用于上传页的说明文案
+    if (url === "/api/settings") return options.settings ?? jsonResponse(200, SETTINGS);
     throw new Error(`未覆盖的请求：${url}`);
   }) as unknown as typeof fetch;
   return calls;

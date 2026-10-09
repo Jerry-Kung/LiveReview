@@ -153,6 +153,42 @@ class UserSession(Base):
 Index("ix_sessions_expires_at", UserSession.expires_at)
 
 
+# 单行系统配置的主键（V0.7.0）。固定值而不是自增：这张表只有一行，用固定主键读它就是
+# 一次主键命中，也不会出现「不小心插出第二行、取值以哪行为准」的问题。
+SETTINGS_ROW_ID = 1
+
+
+class AppSetting(Base):
+    """系统级可变配置：单行表，由界面上的「设置」页读写（V0.7.0）。
+
+    **为什么在库里而不是环境变量**：这是一个要在界面上点、点完要立刻生效的开关。环境变量
+    意味着「改完要重启」，以及「界面设置」与「部署配置」两份要手工同步的清单——V0.5.1 已经
+    为账号做过同一个判断（`AUTH_USERS` 从环境变量移进 `users` 表）。
+
+    **为什么是加列而不是键值表**：本版只有一个开关，键值结构会引入「键名拼错」与「值类型
+    不定」两类不必要的问题。开关变多时改成键值结构是一次纯机械的改动。
+
+    取值一律「无行即为默认」：读不到行时按各字段的默认值处理，因此升级到本版、表刚建出来
+    还没有任何一行时，行为与开关关闭完全一致。
+    """
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=SETTINGS_ROW_ID)
+
+    # 全自动流程模式（V0.7.0）：为真时上传完成的任务自动接着识别、识别结束自动接着复盘。
+    # 默认关闭，因此本版的默认行为与之前完全一致。
+    auto_pipeline_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0")
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    # 最后一次修改者的账号名。只作排查线索，不参与鉴权判定，也不构成审计流水
+    updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class UploadSession(Base):
     """一次大文件上传的会话：记录分片进度，落盘位置由 id 推导。"""
 
@@ -221,6 +257,17 @@ class Task(Base):
     video_expired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # 全自动流程模式（V0.7.0）：**创建任务时的开关快照**，不是当前开关值。
+    #
+    # 存快照而不是每次现读开关，理由有三个：串接判据不受后续开关变更影响；界面上要能如实
+    # 标出「这条当时是全自动跑的」；全自动会真的花钱调模型，出问题时需要能追溯是哪一批。
+    # 默认假，因此旧库补列后，既有任务一律回到手工模式。
+    auto_run: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    # 当前在途阶段的自动补跑次数（V0.7.0）：阶段失败后最多自动补跑 `AUTO_RETRY_LIMIT` 次，
+    # 据此封顶。**串入新阶段时归零**——一个整数列要同时服务于识别与复盘两个阶段，只有归零
+    # 才能表达「正在跑的这个阶段补过几次」。用计数而不是布尔量：日后调整上限不必改表结构。
+    auto_retries: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
     upload_id: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("upload_sessions.id"), nullable=True

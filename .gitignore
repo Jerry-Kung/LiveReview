@@ -227,3 +227,5 @@ backend/media/
 videos/
 
 admin.txt
+# 根目录的 vite 缓存（构建残留，非依赖树）
+/node_modules/

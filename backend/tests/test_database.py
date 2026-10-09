@@ -59,6 +59,17 @@ def _drop_v0_1_5_columns(db_path) -> None:
         conn.execute("DROP TABLE media_clips")
 
 
+def _drop_v0_7_0_artifacts(db_path) -> None:
+    """把库降级成 V0.6.x 的形态：删掉 V0.7.0 新增的两列与配置表。
+
+    没有这张表与这两列时，旧库就是「全自动功能不存在」的样子，因此这是升级路径的起点。
+    """
+    with sqlite3.connect(db_path) as conn:
+        for column in ("auto_run", "auto_retries"):
+            conn.execute(f'ALTER TABLE tasks DROP COLUMN "{column}"')
+        conn.execute("DROP TABLE app_settings")
+
+
 def test_init_db_creates_all_tables_and_columns(engine, db_path):
     database_module.init_db()
     assert _tables(db_path) >= {"upload_sessions", "tasks", "media_clips"}
@@ -144,6 +155,54 @@ def test_init_db_then_query_works_on_upgraded_database(engine, db_path):
         assert [task.id for task in list_tasks(session)] == ["t-2"]
     finally:
         session.close()
+
+
+def test_v0_7_upgrade_adds_auto_columns_and_table(engine, db_path):
+    """V0.7.0 升级路径：旧库补出 `auto_run` / `auto_retries` 与 `app_settings` 表。
+
+    覆盖 §5 验收标准 11——升级到本版不改变已有数据。此前所有用例都用 `create_all` 从空库
+    建表，而「补列 + 补表」这条路径只有这里走到；它是本版唯一涉及既有库结构的部分。
+    """
+    database_module.init_db()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tasks (id, kind, status, progress, created_at, updated_at) "
+            "VALUES ('t-v7', 'ingest', 'succeeded', 100, '2026-01-01 00:00:00', "
+            "'2026-01-01 00:00:00')"
+        )
+    _drop_v0_7_0_artifacts(db_path)
+    assert "auto_run" not in _columns(db_path, "tasks")
+    assert "app_settings" not in _tables(db_path)
+
+    database_module.init_db()
+
+    assert _columns(db_path, "tasks") == _model_columns("tasks")
+    assert "app_settings" in _tables(db_path)
+    # 老任务回到手工模式、补跑计数为 0：默认值必须能在已有行上回填
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT auto_run, auto_retries FROM tasks WHERE id='t-v7'").fetchone()
+    assert row == (0, 0)
+
+
+def test_v0_7_upgrade_switch_defaults_to_disabled(engine, db_path):
+    """新建的 `app_settings` 表里没有行时，开关按「关闭」读——升级不改变任何已有行为。"""
+    from app.settings_store import read_auto_pipeline, write_auto_pipeline
+
+    database_module.init_db()
+    _drop_v0_7_0_artifacts(db_path)
+    database_module.init_db()
+
+    session = sessionmaker(bind=engine)()
+    try:
+        assert read_auto_pipeline(session) is False
+        # 写入后能读回，且只有一行
+        write_auto_pipeline(session, enabled=True, updated_by="tester")
+        assert read_auto_pipeline(session) is True
+    finally:
+        session.close()
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM app_settings").fetchone()[0] == 1
 
 
 def test_sync_missing_columns_rejects_column_that_cannot_be_backfilled(engine, monkeypatch):

@@ -144,6 +144,14 @@ export default function TaskDetail({
             <span className="status" data-tone={taskStatusTone(task.status)}>
               {taskStatusLabel(task.status)}
             </span>
+            {/* 全自动流程模式的任务快照（V0.7.0）：这条任务创建时开关是开着的。
+                读的是任务上的快照而不是当前设置——改开关不改变已创建任务的行为，
+                因此这里如实呈现「这条当时是怎么跑的」。 */}
+            {task.auto_run && (
+              <span className="status" data-tone="busy" title="创建这条任务时已开启全自动流程模式">
+                全自动
+              </span>
+            )}
           </div>
 
           <p className="detail-sub">营销直播录屏分析</p>

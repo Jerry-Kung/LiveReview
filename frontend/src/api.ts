@@ -221,6 +221,13 @@ export type Task = {
   expired_at: string | null;
   /** `expired_at` 的布尔视图：界面只在一处判断 */
   video_expired: boolean;
+  /**
+   * 全自动流程模式的任务快照（V0.7.0）：**创建这条任务时**开关是开着的。
+   *
+   * 它不是当前开关值——改开关不会改变已创建任务的既有行为，因此详情页的标注读这个字段，
+   * 不去问设置接口。
+   */
+  auto_run: boolean;
 };
 
 export type MissingChunks = {
@@ -408,6 +415,40 @@ export function createAccount(
 
 export function deleteAccount(accountId: number): Promise<void> {
   return request<void>(`/api/accounts/${accountId}`, { method: "DELETE" });
+}
+
+/**
+ * 系统设置（V0.7.0）：读对所有登录账号开放，写只对管理员。
+ *
+ * 读走通用 `request<T>()`（401 照常触发「会话失效」回登录页）；写同样走它——非管理员会
+ * 拿到 403，而 403 的中文 `detail` 应当显示出来，而不是被当成掉线。
+ */
+
+export type Settings = {
+  /** 全自动流程模式：上传后自动接着识别与复盘。只影响此后新上传的任务 */
+  auto_pipeline: boolean;
+  /** 识别与复盘用的模型名；未配置时为 null */
+  model_name: string | null;
+  /** 模型是否已配置。为假时「开了也不会自动识别」，界面要提示 */
+  llm_configured: boolean;
+  /** 只读运行参数：切片时长上限（秒） */
+  split_max_duration_seconds: number;
+  /** 只读运行参数：单片体积上限（字节） */
+  split_max_clip_bytes: number;
+  /** 只读运行参数：云端视频保留期（秒） */
+  video_ttl_seconds: number;
+};
+
+export function fetchSettings(): Promise<Settings> {
+  return request<Settings>("/api/settings");
+}
+
+export function updateAutoPipeline(autoPipeline: boolean): Promise<Settings> {
+  return request<Settings>("/api/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_pipeline: autoPipeline }),
+  });
 }
 
 export function sliceFile(file: File, chunkSize: number): Blob[] {

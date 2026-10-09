@@ -1772,6 +1772,90 @@ dd {
   grid-column: 1 / -1;
 }
 
+/* ── 设置页（V0.7.0） ───────────────────────────────────────────────── */
+
+/* 开关行：标签与说明竖排，说明紧贴在开关下方。
+   这里不用 `.field` 那套竖排表单——这一页只有一个布尔项，套上输入框的骨架反而让人以为
+   还有别的字段没填。 */
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+/* 用原生 checkbox 承载状态，视觉层由相邻的两个 span 画——键盘可聚焦、读屏可识别、
+   表单语义都在原生控件上，样式只做外观。 */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s3);
+  cursor: pointer;
+  font-size: var(--fs-note);
+  font-weight: 500;
+  user-select: none;
+}
+
+/* 原生控件视觉上隐藏但仍在可访问性树里：`display:none` 会让它拿不到焦点、
+   读屏也读不到，那样这个开关就只能用鼠标点。 */
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+
+.switch-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex: none;
+  border-radius: 11px;
+  background: var(--fill-hover);
+  border: 1px solid var(--line);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  transition: transform 0.15s ease;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.switch input:checked + .switch-track .switch-thumb {
+  transform: translateX(18px);
+  border-color: var(--brand);
+}
+
+/* 焦点环画在轨道上：原生控件本身是隐藏的，键盘用户必须能看见焦点落在哪里 */
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.switch input:disabled + .switch-track {
+  opacity: 0.5;
+}
+
+.switch input:disabled ~ .switch-label {
+  color: var(--ink-soft);
+}
+
+.switch-label {
+  color: var(--ink);
+}
+
 /* ── 登录页与启动态 ─────────────────────────────────────────────────── */
 
 /* 未登录时占据整个视口：这不是工作台上的一个弹层，而是进入工作台的门。 */
