@@ -10,9 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { MEMBER_SESSION, SESSION } from "./test/fixtures";
 
-/** 设置响应：默认关闭全自动流程模式，与后端默认值一致。 */
+/** 设置响应：默认开启全自动流程模式，与后端默认值一致（V0.7.1）。 */
 const SETTINGS = {
-  auto_pipeline: false,
+  auto_pipeline: true,
   model_name: "test-model",
   llm_configured: true,
   split_max_duration_seconds: 3600,

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.models import Task
@@ -14,12 +15,17 @@ from app.settings_store import read_auto_pipeline
 from tests.test_uploads import _create
 
 
-def test_read_defaults_to_disabled(client: TestClient):
-    """未写过时开关为关闭：这决定了升级到本版不会改变任何已有行为。"""
+@pytest.mark.real_default
+def test_read_defaults_to_enabled(client: TestClient):
+    """未写过时开关为开启（V0.7.1）：新装环境不必先点开关，上传完就会自己跑完。
+
+    标 `real_default` 跳过 conftest 里那条预写「关闭」的夹具——本用例要验的正是空表时的
+    取值，夹具会把它盖掉。
+    """
     resp = client.get("/api/settings")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["auto_pipeline"] is False
+    assert body["auto_pipeline"] is True
     # 只读运行参数一并给出：它们决定「打开开关意味着什么」
     assert body["split_max_duration_seconds"] > 0
     assert body["split_max_clip_bytes"] > 0
@@ -30,18 +36,22 @@ def test_read_defaults_to_disabled(client: TestClient):
 
 
 def test_member_can_read(client: TestClient, member_client: TestClient):
-    """普通账号读得到：上传页要据此切换说明文案。"""
+    """普通账号读得到，且读到的是同一个取值：上传页要据此切换说明文案。"""
+    assert client.patch("/api/settings", json={"auto_pipeline": True}).status_code == 200
+
     resp = member_client.get("/api/settings")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["auto_pipeline"] is False
+    assert resp.json()["auto_pipeline"] is True
 
 
 def test_member_cannot_write(client: TestClient, member_client: TestClient):
     """普通账号写入被拒，且是 403（已登录、只是不对他开放），不是 401。"""
-    resp = member_client.patch("/api/settings", json={"auto_pipeline": True})
+    assert client.patch("/api/settings", json={"auto_pipeline": True}).status_code == 200
+
+    resp = member_client.patch("/api/settings", json={"auto_pipeline": False})
     assert resp.status_code == 403, resp.text
     # 拒绝之后开关不该有任何变化
-    assert client.get("/api/settings").json()["auto_pipeline"] is False
+    assert client.get("/api/settings").json()["auto_pipeline"] is True
 
 
 def test_anonymous_cannot_read(anonymous_client: TestClient):

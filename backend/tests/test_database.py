@@ -184,8 +184,8 @@ def test_v0_7_upgrade_adds_auto_columns_and_table(engine, db_path):
     assert row == (0, 0)
 
 
-def test_v0_7_upgrade_switch_defaults_to_disabled(engine, db_path):
-    """新建的 `app_settings` 表里没有行时，开关按「关闭」读——升级不改变任何已有行为。"""
+def test_v0_7_upgrade_switch_defaults_to_enabled(engine, db_path):
+    """新建的 `app_settings` 表里没有行时，开关按「开启」读（V0.7.1 的产品默认）。"""
     from app.settings_store import read_auto_pipeline, write_auto_pipeline
 
     database_module.init_db()
@@ -194,7 +194,7 @@ def test_v0_7_upgrade_switch_defaults_to_disabled(engine, db_path):
 
     session = sessionmaker(bind=engine)()
     try:
-        assert read_auto_pipeline(session) is False
+        assert read_auto_pipeline(session) is True
         # 写入后能读回，且只有一行
         write_auto_pipeline(session, enabled=True, updated_by="tester")
         assert read_auto_pipeline(session) is True

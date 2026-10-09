@@ -5,9 +5,11 @@
 取值只在两处被读到（设置页的请求处理、后台串接的每个阶段结束时一次），由调用方决定事务
 边界比在这里藏一个隐式事务更清楚。
 
-「读不到行即默认值」是本模块唯一的容错承诺：表刚建出来还没有任何一行时（升级到本版的
-首次启动），行为必须与开关关闭完全一致。**不在读路径上顺手建行**——写操作应当有明确的
-来源（谁在设置页点了什么），由读隐式建行会让「这行是谁建的」变得不可读。
+「读不到行即默认值」是本模块唯一的容错承诺：表刚建出来还没有任何一行时（首次启动），开关
+按**开启**读——V0.7.1 起这是产品的期望默认，让开箱即用的链路是「上传完自己跑完」，而不是
+要人先找开关。**不在读路径上顺手建行**——写操作应当有明确的来源（谁在设置页点了什么），
+由读隐式建行会让「这行是谁建的」变得不可读；相应地，「默认开启」只体现为读回来的假值，
+库里始终没有行，第一次有人关掉开关时才落第一行。
 """
 
 from __future__ import annotations
@@ -22,9 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 def read_auto_pipeline(db: Session) -> bool:
-    """读全自动流程开关；表里没有这一行时按默认值「关闭」处理。"""
+    """读全自动流程开关；表里没有这一行时按默认值「开启」处理（V0.7.1）。"""
     row = db.get(AppSetting, SETTINGS_ROW_ID)
-    return bool(row.auto_pipeline_enabled) if row is not None else False
+    return bool(row.auto_pipeline_enabled) if row is not None else True
 
 
 def write_auto_pipeline(db: Session, *, enabled: bool, updated_by: str | None) -> AppSetting:

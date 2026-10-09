@@ -35,10 +35,10 @@ export function sessionRoute(url: string, body: unknown = SESSION) {
  *
  * 放在这里而不是各测试文件各写一份：壳层登录后会读一次 `GET /api/settings`，而所有
  * 渲染整个 `App` 的用例都会撞上这个请求。集中一份可以避免「改了字段名漏改一处」，
- * 也让「默认关闭」这个与后端一致的默认值只有一个来源。
+ * 也让「默认开启」（V0.7.1）这个与后端一致的默认值只有一个来源。
  */
 export const SETTINGS = {
-  auto_pipeline: false,
+  auto_pipeline: true,
   model_name: "test-model",
   llm_configured: true,
   split_max_duration_seconds: 3600,

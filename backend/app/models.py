@@ -168,8 +168,8 @@ class AppSetting(Base):
     **为什么是加列而不是键值表**：本版只有一个开关，键值结构会引入「键名拼错」与「值类型
     不定」两类不必要的问题。开关变多时改成键值结构是一次纯机械的改动。
 
-    取值一律「无行即为默认」：读不到行时按各字段的默认值处理，因此升级到本版、表刚建出来
-    还没有任何一行时，行为与开关关闭完全一致。
+    取值一律「无行即为默认」：读不到行时按各字段的默认值处理，因此表刚建出来还没有任何
+    一行时，行为与本文件里声明的默认值完全一致。
     """
 
     __tablename__ = "app_settings"
@@ -177,9 +177,9 @@ class AppSetting(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=SETTINGS_ROW_ID)
 
     # 全自动流程模式（V0.7.0）：为真时上传完成的任务自动接着识别、识别结束自动接着复盘。
-    # 默认关闭，因此本版的默认行为与之前完全一致。
+    # 默认开启（V0.7.1）：默认链路就是「上传完自己跑完」，关掉才回到各阶段手工点击。
     auto_pipeline_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=text("0")
+        Boolean, default=True, server_default=text("1")
     )
 
     updated_at: Mapped[datetime] = mapped_column(

@@ -3,7 +3,8 @@
 `conftest` 把执行器换成了同步实现，因此一次上传（或一次手工入队）会把整条链路一路跑到底，
 `run()` 在每个阶段结束时调用 `advance`，本文件观察的就是这条链条的行为。
 
-覆盖方案里需要被钉住的几件事：默认关闭时行为与之前一致；打开后一路跑到复盘；两道闸
+覆盖方案里需要被钉住的几件事：开关关闭时行为与 V0.7.0 之前一致（关闭态由夹具显式写入）；
+打开后一路跑到复盘；两道闸
 （任务快照 + 当前开关）都生效；识别失败只自动补跑一次；一片未成功时不串复盘；模型未配置
 时不入队而是落成可解释的失败。
 """
@@ -72,11 +73,13 @@ def always_fail_understanding(monkeypatch) -> FakeUnderstandingClient:
     return fake
 
 
-# —— 默认关闭：行为与之前完全一致 ——
+# —— 开关关闭：行为与 V0.7.0 之前完全一致 ——
+# 注意这组用例的关闭态来自 conftest 的 `manual_auto_pipeline` 夹具（V0.7.1 起出厂默认是开启），
+# 模拟的是「管理员把开关关掉了」的部署，而不是「出厂默认」。
 
 
-def test_disabled_by_default_does_not_chain(client, db_session_factory):
-    """开关默认关闭时，上传后只跑切分，不自动进入识别。"""
+def test_switch_off_does_not_chain(client, db_session_factory):
+    """开关关闭时，上传后只跑切分，不自动进入识别。"""
     task_id = _upload(client)
 
     task = _task(client, task_id)

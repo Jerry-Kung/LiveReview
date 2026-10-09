@@ -17,7 +17,7 @@ import type { Settings } from "./api";
  * 于是「模型未配置」那条用例传 null 就编译不过。
  */
 const SAMPLE: Settings = {
-  auto_pipeline: false,
+  auto_pipeline: true,
   model_name: "test-model",
   llm_configured: true,
   split_max_duration_seconds: 3600,
@@ -73,15 +73,17 @@ describe("设置页：全自动流程模式（V0.7.0）", () => {
     render(<SettingsPage isAdmin />);
 
     const toggle = await screen.findByRole("checkbox");
-    expect(toggle).not.toBeChecked();
-    expect(screen.getByText("已关闭")).toBeInTheDocument();
+    // 出厂默认是开启：新装环境打开这一页看到的就是「已开启」，不必先找开关
+    expect(toggle).toBeChecked();
+    expect(screen.getByText("已开启")).toBeInTheDocument();
 
     // 只读参数里最能影响费用的一项是模型名，必须看得见
     const facts = screen.getByLabelText("运行参数");
     expect(within(facts).getByText("test-model")).toBeInTheDocument();
   });
 
-  it("管理员勾选开关会提交 PATCH，并以服务端返回的取值为准", async () => {
+  it("管理员取消勾选会提交 PATCH，并以服务端返回的取值为准", async () => {
+    // 样例给「已开启」，取消勾选应提交 false——这是本版默认值翻转后用户最常做的一次改动
     const patches = stubFetch(SAMPLE);
     render(<SettingsPage isAdmin />);
 
@@ -89,9 +91,9 @@ describe("设置页：全自动流程模式（V0.7.0）", () => {
     fireEvent.click(toggle);
 
     await waitFor(() => expect(patches).toHaveLength(1));
-    expect(patches[0]).toEqual({ auto_pipeline: true });
+    expect(patches[0]).toEqual({ auto_pipeline: false });
     // 界面显示的是服务端落库后的取值，不是本地乐观置位
-    await waitFor(() => expect(screen.getByText("已开启")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("已关闭")).toBeInTheDocument());
   });
 
   it("非管理员看得到状态，但开关不可点，并说明去哪里改", async () => {

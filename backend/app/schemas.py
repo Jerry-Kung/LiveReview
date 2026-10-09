@@ -385,7 +385,8 @@ class StatusResponse(BaseModel):
 class SettingsResponse(BaseModel):
     """系统设置。读对所有登录账号开放，写只对管理员。
 
-    `auto_pipeline` 是唯一可改的项；其余字段是**只读的运行参数**，当前由环境变量决定，
+    `auto_pipeline` 是唯一可改的项，默认值取「开启」（V0.7.1，见 `app/models.py` 的列默认值与
+    `app/settings_store.py` 的无行回落）；其余字段是**只读的运行参数**，当前由环境变量决定，
     放在这里是因为它们决定了「打开开关意味着什么」——用户需要知道全自动会按哪个模型、哪种
     切片粒度花钱。模型未配置时 `model_name` 为 null 而 `llm_configured` 为假，界面据此
     提示「开了也不会自动识别」。
