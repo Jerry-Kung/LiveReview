@@ -1721,6 +1721,184 @@ dd {
   border-radius: var(--r2);
 }
 
+/* ── 复盘结论新增块（V0.8.0）：编号引用、内容重复度、违规表达、金句 ─────── */
+
+.report-topic {
+  font-size: var(--fs-note);
+  line-height: 20px;
+  color: var(--ink-soft);
+}
+
+/* 编号标签：默认只占一行标签宽度，展开才显示准则原文，避免结论被长文本淹没 */
+.code-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  list-style: none;
+  margin-top: var(--s2);
+  padding: 0;
+}
+
+.code-chip > details > summary {
+  padding: 1px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: var(--fs-cap);
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+
+.code-chip > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.code-chip[data-kind="mind"] > details > summary {
+  border-color: var(--brand-line, var(--line));
+  color: var(--brand);
+}
+
+.code-chip > details[open] > summary {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.code-chip-detail {
+  max-width: 46ch;
+  margin-top: var(--s1);
+  font-size: var(--fs-cap);
+  line-height: 18px;
+  color: var(--ink-soft);
+}
+
+.repetition,
+.violations,
+.quotes {
+  list-style: none;
+  padding: 0;
+}
+
+.repetition-item,
+.violation-item,
+.quote-item {
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.repetition-item:last-child,
+.violation-item:last-child,
+.quote-item:last-child {
+  border-bottom: 0;
+}
+
+.repetition-head,
+.violation-head,
+.quote-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+}
+
+.repetition-name,
+.violation-term,
+.quote-text {
+  font-size: var(--fs-body);
+  color: var(--ink);
+}
+
+.repetition-count,
+.violation-time,
+.quote-time {
+  font-size: var(--fs-cap);
+  color: var(--ink-mute);
+}
+
+/* 有无信息增量决定这条要不要当问题处理，因此给两种取值各配一个色调 */
+.repetition-flag {
+  padding: 1px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: var(--fs-cap);
+  color: var(--ink-soft);
+}
+
+.repetition-flag[data-increment="yes"] {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.repetition-flag[data-increment="no"] {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+/* 违规词按风险色标注，「改为」之后是可直接替换的说法 */
+.violation-term {
+  padding: 1px var(--s2);
+  border-radius: 4px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  text-decoration: line-through;
+}
+
+.violation-arrow {
+  font-size: var(--fs-cap);
+  color: var(--ink-mute);
+}
+
+.violation-replacement {
+  font-size: var(--fs-body);
+  color: var(--ok);
+}
+
+.repetition-verdict,
+.repetition-times,
+.violation-quote,
+.quote-scene,
+.quote-effect {
+  margin-top: 2px;
+  font-size: var(--fs-note);
+  line-height: 20px;
+  color: var(--ink-soft);
+}
+
+.repetition-times {
+  font-family: var(--mono);
+  color: var(--ink-mute);
+}
+
+.quote-category {
+  padding: 1px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: var(--fs-cap);
+  color: var(--ink-soft);
+}
+
+.quote-text {
+  margin-top: var(--s1);
+  line-height: 22px;
+}
+
+.action-current,
+.action-change,
+.action-criteria {
+  margin-top: 2px;
+  font-size: var(--fs-note);
+  line-height: 20px;
+  color: var(--ink-soft);
+}
+
+/* 成功标准是「下一场怎么算做对了」，比做法本身更该被看见 */
+.action-criteria {
+  font-weight: 600;
+  color: var(--brand);
+}
+
 /* ── 表单字段：登录页与账号管理页使用；工作台里的参数编辑尚未接入 ─────── */
 
 .field {

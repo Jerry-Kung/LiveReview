@@ -123,7 +123,7 @@ def _after_understanding(db: Session, task: Task) -> str | None:
     - `succeeded`：直接串复盘。
     - `skipped`：本次没有任何可识别的输入（切片未就绪）。补跑没有意义，停。
     - `failed`：先按上限补跑一次（只重发失败的片段）；补跑结束后只要有片段成功就串复盘
-      ——缺口会由 `merge_reviews` 写进分析等级与「本场不足以判断」，这比不给结论有用。
+      ——缺口会由 `merge_passes` 写进分析等级与「本场不足以判断」，这比不给结论有用。
       一片都没成功则不串：复盘任务体会以 `skipped` 短路，串过去只是白跑一趟流程。
     """
     status = task.understanding_status

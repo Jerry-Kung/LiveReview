@@ -24,6 +24,7 @@ from app.tasks.review import (
     PROGRESS_REVIEW_END,
     PROGRESS_REVIEW_START,
     load_review_result,
+    merge_passes,
     reset_task_review,
     review_to_markdown,
     run_review,

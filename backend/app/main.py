@@ -12,6 +12,7 @@ from app.database import init_db
 from app.routers import accounts
 from app.routers import auth as auth_router
 from app.routers import health, tasks as tasks_router
+from app.routers import guideline
 from app.routers import review
 from app.routers import settings as settings_router
 from app.routers import understanding
@@ -94,6 +95,10 @@ app.include_router(review.router, dependencies=auth_required)
 # 因此这里只挂 `auth_required`，写入端点自己用 `require_admin` 收窄——两类要求不同，
 # 不能像账号管理那样整组挂管理员依赖，否则普通账号连读都读不到。
 app.include_router(settings_router.router, dependencies=auth_required)
+
+# 复盘准则的编号对照表（V0.8.0）：与设置读口同类，对所有登录账号开放。它是静态参考内容，
+# 不含任务数据与运行配置，而主播与运营都要能查到「话术样板 04」指的是什么。
+app.include_router(guideline.router, dependencies=auth_required)
 
 # 账号管理（V0.5.2）整组要求管理员：依赖放在 `require_admin` 里，它自己依赖 `require_user`，
 # 因此这里**不再叠加** auth_required——重复挂载不会多查库（依赖按调用者缓存），但会让人

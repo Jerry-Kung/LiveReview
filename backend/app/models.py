@@ -310,6 +310,11 @@ class Task(Base):
     review_clip_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     # 本次分析了多少批转写（长直播分批调用）：耗时与用量的解释项
     review_batch_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # 分轮复盘的中间产物（V0.8.0）：键为轮次名（structure / checks / attribution / quotes），
+    # 值为该轮归一后的结论。**落库的理由是失败隔离**：某轮失败时已完成轮次的产物必须留下，
+    # 重试只重跑缺的那一轮，而不是把前面几轮花掉的推理再买一遍。整轮重跑（用户点「重新复盘」）
+    # 会把它清空——那才是「这一次的结论以最后一次为准」的语义。
+    review_passes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_usage_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -365,6 +370,10 @@ class Task(Base):
 
         计数类字段归零：`reset_*` 已清零，这里再写一次是为了让入队接口与任务体走上同一条
         路径，而不依赖「调用方一定先 reset 过」这个约定。
+
+        **`review_passes_json` 刻意不清**：分轮复盘的中间产物是失败隔离的凭据，补跑时只该
+        重跑缺的那一轮。清空它的只有用户主动发起的重跑（`reset_task_review`）——那才是
+        「这一次的结论以最后一次为准」的语义。
         """
         self.review_status = REVIEW_STATUS_RUNNING
         self.review_progress = PROGRESS_REVIEW_START

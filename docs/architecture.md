@@ -16,9 +16,9 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **`backend/app/uploads.py`**：上传会话状态取值与「合并 → 上传对象存储 → 任务转待处理」的入库链路。接口层与启动恢复共用同一份实现——上传由浏览器逐片驱动，因此收齐之后的步骤不能写在请求处理里，否则关页面就断了。
 - **`backend/app/tasks/`**：后台任务执行器（进程内线程池）、任务状态流转、启动恢复与定期清理（`cleanup.py`：无主本地产物清扫、过期视频回收），以及全自动流程模式的阶段串接（`chain.py`，V0.7.0），详见下节。
 - **`backend/app/media/`**：媒体处理（ffprobe 探测、ffmpeg 转封装与切分、覆盖校验）的调用、解析与本地产物路径约定；只依赖配置与标准库，不感知数据库、HTTP 与对象存储。
-- **`backend/app/llm/`**：模型接入。`base.py` 定义契约与领域异常，`client.py` 为基于 OpenAI 兼容接口的实现（视频理解走 `responses`，复盘走 `chat.completions`），`prompts.py` / `review_prompts.py` 为两条链路的提示词，`parsing.py` 为模型输出的解析、时间对齐与复盘结论归一；业务代码只依赖本包，不接触模型厂商 SDK。
+- **`backend/app/llm/`**：模型接入。`base.py` 定义契约与领域异常，`client.py` 为基于 OpenAI 兼容接口的实现（视频理解走 `responses`，复盘走 `chat.completions`），`prompts.py` / `review_prompts.py` 为两条链路的提示词（复盘自 V0.8.0 起按轮次分题面，见下），`mindset.py` 是准则附录（12 条心法、30 句话术样板、违规词库）的唯一事实来源，`parsing.py` 为模型输出的解析、时间对齐与复盘结论归一；业务代码只依赖本包，不接触模型厂商 SDK。
 - **`backend/app/transcript.py`**：识别结果汇总。对外给两份产物：人工核对用的整场全文（接口与导出）与复盘节点用的输入文本（带时间戳与语气标注，按记录边界分批）；被 `routers/understanding.py` 与 `tasks/review.py` 调用。
-- **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针（公开），`auth.py` 承载登录、退出与当前身份，`uploads.py`、`tasks.py`、`understanding.py` 与 `review.py` 面向前端（统一 `/api` 前缀，整组要求登录），`settings.py`（V0.7.0）读系统设置并对管理员开放写入，`accounts.py` 整组要求管理员。
+- **`backend/app/routers/`**：HTTP 路由层。`health.py` 面向编排探针（公开），`auth.py` 承载登录、退出与当前身份，`uploads.py`、`tasks.py`、`understanding.py` 与 `review.py` 面向前端（统一 `/api` 前缀，整组要求登录），`settings.py`（V0.7.0）读系统设置并对管理员开放写入，`guideline.py`（V0.8.0）只读地吐出准则编号对照表，`accounts.py` 整组要求管理员。
 - **`backend/app/auth/`**：用户鉴权。`store.py` 是 `users` / `sessions` 两张表的唯一读写点（账号存取、会话签发与撤销），`password.py` 做 PBKDF2 单向校验，`session.py` 定 Cookie 名与令牌的生成、摘要，`service.py` 比对凭据并按账号节流失败次数，`init_admin.py` 是冷启动建号与改口令的命令行脚本，`passwd.py` 是生成、校验口令哈希的命令行工具，`__init__.py` 是对外的 FastAPI 依赖与 Cookie 读写。
 - **`backend/app/storage/`**：对象存储的契约与实现，详见下节。
 - **`frontend/src/`**：React SPA，单页工作台。`App.tsx` 为壳层（登录门槛 + 页眉 + 侧栏 + 工作区），`LoginPage.tsx` 是未登录时的整屏登录页，`session.ts` 是当前身份的唯一起点，`Header.tsx` 承载品牌、搜索与账号区，`Sidebar.tsx` 承载新建任务入口与历史记录，`Workbench.tsx` 承载上传流程与历史任务的只读展示，`TaskSummary.tsx` / `ClipTable.tsx` / `Understanding.tsx` / `Review.tsx` / `UploadProgress.tsx` 负责结果与进度呈现，`format.ts` 统一文案与数值格式化，`api.ts` 对应后端接口契约。历史记录读既有任务列表接口，账号隔离尚未实现（V0.5 的用户只用于访问控制，不切分数据）。
@@ -50,7 +50,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
   3. **被打断的识别**：`understanding_status` 退回 `pending` 并重新入队。只认「曾经启动过」（`understanding_started_at` 有值）且这一轮没有结论的任务，已成功的片段保留不动，因此重启不会重复计费；从未启动过识别的任务不会被自动拉起。
   4. **被打断的复盘**：`review_status` 退回 `pending` 并重新入队。判定方式同上（`review_started_at` 有值且这一轮没有结论）。复盘输入是已落库的识别结果，续跑最多重跑一次文本调用。
   5. **全自动链路断在阶段之间**（V0.7.0）：上一阶段已结束、下一阶段从未启动的全自动任务，由 `chain.sweep_pending` 接着串下去。这一条与上面四条不同——它不看「在途状态」（这类任务的状态是干净的终态），而是按落库状态反查「该被推进的起点阶段」，因此不受上面几条是否命中影响。
-复盘链路（V0.3 起）：同样由 `POST /api/tasks/{id}/review` 触发（手工模式下由用户点击，全自动模式下由识别结束后自动串入），前置条件是「有识别成功的语音记录」。任务体先把整场转写渲染成复盘输入（时间戳 + 语气标注，缺口显式声明），超出单批上限则按**记录边界**分批调用文本模型，逐批拿到结构化 JSON 后由 `merge_reviews` 做**结构性合并**（去重、按时间排序、按准则截断 TOP3）——不额外发起摘要调用。分析等级由程序按真实覆盖面兜底校正（成功率低于 50% 强制「受限」，有失败片段时不得为「完整」）。复盘输入是已落库的识别结果，因此重跑不触碰识别，被重启打断时自动续跑最多重跑一次文本调用。
+复盘链路（V0.3 起，V0.8.0 改为分轮）：同样由 `POST /api/tasks/{id}/review` 触发（手工模式下由用户点击，全自动模式下由识别结束后自动串入），前置条件是「有识别成功的语音记录」。任务体先把整场转写渲染成复盘输入（时间戳 + 语气标注，缺口显式声明），超出单批上限则按**记录边界**分批。V0.8.0 起一次复盘拆成**四轮专项调用**（`structure` 内容结构 → `checks` 六维检核 → `attribution` 问题归因与实验 → `quotes` 金句采集），每轮的 system 共用同一份裁剪准则、各自追加本轮题面与输出契约；归因轮不重送转写，改为吃前序轮次的结构化产出。各轮产物按轮次落 `review_passes_json`，因此某一轮失败可以单独重跑而不必重跑整条复盘。四轮产出由 `merge_passes` 做**结构性合并**（去重、按时间排序、按准则截断 TOP3）——不额外发起摘要调用。分析等级由程序按真实覆盖面兜底校正（成功率低于 50% 强制「受限」，有失败片段时不得为「完整」）。复盘输入是已落库的识别结果，因此重跑不触碰识别，被重启打断时自动续跑最多重跑一次文本调用。
 
 **全自动流程模式（V0.7.0）**：识别与复盘可以由一个开关串起来。开关存单行的 `app_settings` 表（不是环境变量，理由同账号：界面上的设置要与运行中的取值同源），默认开启（V0.7.1 起；`app_settings` 里没有那一行即按开启读，关掉开关才会落行），因此默认行为是「上传完自己跑完」，要回到各阶段手工点击须由管理员在设置页显式关闭。串接点是 `app/tasks/chain.py` 的 `advance(task_id, from_phase)`，由 `executor.run()` 在**每个阶段的任务体跑完之后**调用——不能在任务体内调：线程池只有 `MAX_WORKERS` 个 worker，任务体自己占着一个，两个 worker 同时 submit 会双双阻塞在队列上而自锁。推进要过两道闸：任务行的 `auto_run` 快照（创建时取值写死，挡住追溯）与当前开关（挡住「关掉之后继续花钱」）。识别失败但**有片段成功**时自动补跑一次（`auto_retries` 封顶，只重发失败的片段），补跑后仍失败则停在那一步；一片都未成功时不串复盘。进程在「上一阶段已结束、下一阶段还没入队」之间被杀时，由 `requeue_pending` 末尾的 `sweep_pending` 补上。真实边界与取舍见 `docs/specs/v0.7.0-design.md`。
 
@@ -59,7 +59,7 @@ LiveReview V0 是前后端分离的单体单仓应用：前端为纯 SPA，后�
 - **探测阶段**：任务体用 ffprobe 探测原始视频，常用元数据升为任务表的列（时长、分辨率、编码、码率、流数），完整 ffprobe 输出存 `metadata_json`，内容 sha256 存 `content_hash`。时间基准（`duration_seconds`）是切分的依据。
 - **切分阶段**：切分输入可能是转封装产物而非原始视频，其容器与时长单独记录在 `split_source_format` / `split_source_duration_seconds`——覆盖校验必须按切分输入的时长判断，而不是原始文件的时长。切片逐条落在 `media_clips` 表（序号、起止秒、实测时长与体积、对象键、状态），序号即时间轴顺序，重试按序号复用已上传的片段。
 - **识别阶段（V0.2）**：任务体不共用切分链的 `status`（`uploaded` / `processing` / `succeeded` / `failed` 仍然只描述切分链），而是写 `understanding_*` 字段。这样「切分成功但识别失败」与「识别要重跑而切分产物不动」互不干扰；切分进度与识别进度因此也是两组独立取值（切分 0→100，识别 0→100 另算）。
-- **复盘阶段（V0.3）**：与识别同构，写 `review_*` 字段、不共用切分链的 `status`；结构化结论存 `review_result_json`，各批原始返回另存 `review_raw_text`——复盘换提示词就要重跑，原始返回是判断「是提示词的问题还是模型的问题」的唯一凭据。
+- **复盘阶段（V0.3）**：与识别同构，写 `review_*` 字段、不共用切分链的 `status`；结构化结论存 `review_result_json`，各批原始返回另存 `review_raw_text`——复盘换提示词就要重跑，原始返回是判断「是提示词的问题还是模型的问题」的唯一凭据。V0.8.0 起另存 `review_passes_json`：四轮各自的产物按轮次留存，重跑时可以只重发失败的那一轮。
 - **失败可见**：失败原因写入任务与上传会话的 `error` 字段，接口原样返回；服务端存储错误带上 `request_id`。已入库的失败任务可经重试接口重新入队（重试前清空探测结论与覆盖结论，片段行保留以复用已上传产物），未入库的失败应重新发起上传而非重试任务。
 
 ## 对象存储

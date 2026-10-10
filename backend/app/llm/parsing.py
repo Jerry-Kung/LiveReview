@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.llm.base import ReviewResult, SpeechSegment, UnderstandingResult
+from app.llm.mindset import MIND_SET_CODES, SAMPLE_CODES
 
 logger = logging.getLogger(__name__)
 
@@ -350,11 +351,19 @@ _REVIEW_ALIASES: dict[str, tuple[str, ...]] = {
     "one_line": ("one_line", "summary", "one_line_summary", "conclusion", "verdict"),
     "analysis_level": ("analysis_level", "level"),
     "level_reason": ("level_reason", "analysis_level_reason", "level_basis", "basis"),
+    # V0.8.0 新增：内容主题分布。它是结构轮的产出，也是「这场讲了什么」的分布口径，
+    # 与一句话结论并列展示，因此和 one_line 一样按文本字段归一（不是列表）
+    "topic_distribution": ("topic_distribution", "topic_breakdown", "content_distribution", "主题分布"),
     "key_events": ("key_events", "events", "timeline", "key_moments"),
     "findings": ("findings", "observations", "dimensions", "analysis"),
     "top_issues": ("top_issues", "issues", "problems", "top3_issues"),
     "next_actions": ("next_actions", "actions", "experiments", "next_experiments"),
     "missing_info": ("missing_info", "gaps", "missing", "limitations"),
+    # V0.8.0 新增：金句采集、违规词检核、内容重复度专项。别名给全，是因为这三个字段来自
+    # 新增的多轮调用，各轮题面不同，模型对同义字段的措辞差异比既有字段更大
+    "quotes": ("quotes", "golden_sentences", "highlights", "collected_quotes", "金句"),
+    "violations": ("violations", "violation_terms", "banned_words", "违规词", "违规表达"),
+    "repetition": ("repetition", "repetition_analysis", "content_repetition", "重复度", "无效重复"),
 }
 
 # 列表型字段的子项别名：子项字段缺失时按空字符串处理，不整条丢弃——列表本身有内容这件事
@@ -373,6 +382,8 @@ _REVIEW_ITEM_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "evidence": ("evidence", "quote", "original", "proof"),
         "start_seconds": ("start_seconds", "start_time", "start", "time"),
         "suggestion": ("suggestion", "advice", "recommendation", "action"),
+        # V0.8.0：这条判断对应（或缺失）的心法编号
+        "principle_codes": ("principle_codes", "mindset_codes", "mindset", "心法编号", "心法"),
     },
     "top_issues": {
         "problem": ("problem", "issue", "fact", "description"),
@@ -380,11 +391,41 @@ _REVIEW_ITEM_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "impact": ("impact", "affected", "effect"),
         "root_cause": ("root_cause", "cause", "category"),
         "action": ("action", "fix", "improvement", "next"),
+        # V0.8.0：缺失的心法与可照念的话术样板编号——准则要求「下一场动作必须引用具体编号」
+        "principle_codes": ("principle_codes", "mindset_codes", "mindset", "心法编号", "心法"),
+        "script_codes": ("script_codes", "sample_codes", "scripts", "话术样板编号", "话术样板"),
     },
     "next_actions": {
         "goal": ("goal", "objective", "target", "experiment_goal"),
         "how": ("how", "steps", "method", "when_and_what"),
         "observe": ("observe", "metrics", "indicators", "watch"),
+        # V0.8.0：实验要做成可执行、可区分，因此补齐「现在怎么做、改成怎么做、为什么换方向、
+        # 什么算成功」四段。这部分由归因实验轮产出，不再只是目标与做法两句话
+        "current_approach": ("current_approach", "current_way", "now", "当前方式"),
+        "change_reason": ("change_reason", "difference", "why_change", "与历史差异", "改变原因"),
+        "success_criteria": ("success_criteria", "success_standard", "target_metric", "成功标准"),
+        "script_codes": ("script_codes", "sample_codes", "scripts", "话术样板编号", "话术样板"),
+    },
+    "quotes": {
+        "start_seconds": ("start_seconds", "start_time", "start", "time"),
+        "end_seconds": ("end_seconds", "end_time", "end", "to"),
+        "text": ("text", "quote", "content", "sentence", "原话", "话术原文"),
+        "category": ("category", "type", "kind", "分类"),
+        "scene": ("scene", "context", "scenario", "适用场景", "场景"),
+        "effect": ("effect", "impact", "evidence", "效果", "效果评价"),
+    },
+    "violations": {
+        "term": ("term", "word", "violation", "违规词", "违规表达"),
+        "quote": ("quote", "evidence", "original", "原话"),
+        "replacement": ("replacement", "suggestion", "alternative", "替换", "合规替换"),
+        "start_seconds": ("start_seconds", "start_time", "start", "time"),
+    },
+    "repetition": {
+        "item": ("item", "point", "selling_point", "topic", "卖点", "内容"),
+        "count": ("count", "times_count", "frequency", "次数"),
+        "has_increment": ("has_increment", "incremental", "is_effective", "是否有信息增量", "有效"),
+        "verdict": ("verdict", "judgement", "conclusion", "结论"),
+        "times": ("times", "timestamps", "occurrences", "时段"),
     },
 }
 
@@ -425,6 +466,77 @@ def _review_seconds(value: Any) -> float | None:
     return _to_seconds(value)
 
 
+def _review_codes(value: Any, known: frozenset[str], *, field: str, warnings: list[str]) -> list[str]:
+    """编号列表归一：只留确实存在的编号，并给缺失的编号记账。
+
+    编号是本系统与一线业务之间的**引用键**（报告里写「使用话术样板 04」，主播要能查到 04
+    说的是什么）。因此模型给出的编号一律要对着数据源校验：不存在的编号若被原样留下，报告里
+    就会出现一个查不到出处的指代，比没有引用更糟——用户会以为是自己漏看了某份资料。
+
+    取值要宽松：模型可能给 `"04"`（字符串）、`4`（数字）、`"话术样板04"`（带前缀），也可能给
+    一个列表。数字要补前导零才对得上编号（`4` → `"04"`），带前缀的要能从中提取出数字。
+    """
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+
+    codes: list[str] = []
+    for item in raw_items:
+        text = str(item).strip()
+        if not text:
+            continue
+        candidate = _match_code(text, known)
+        if candidate is None:
+            warnings.append(f"{field} 引用了不存在的编号 {text}，已忽略")
+            continue
+        if candidate not in codes:
+            codes.append(candidate)
+    return codes
+
+
+def _match_code(text: str, known: frozenset[str]) -> str | None:
+    """把一个编号写法匹配到已知编号；匹配不到返回 None。
+
+    两种写法都要认：原样（「心法3」——心法编号带前缀，不是纯数字），以及纯数字（模型常把
+    「04」写成 4、「心法3」写成 3）。
+
+    纯数字必须**按数值**去比对已知编号里的数字部分，而不是简单地补前导零：`3` 既可能指话术
+    样板 03，也可能指心法3，只有对照给定的编号集合才知道该补哪个前缀。按数值比对还有个好处
+    是「心法1」与「心法11」这种前缀相同、数字不同的编号不会互相误配。
+    """
+    if text in known:
+        return text
+    digits = re.findall(r"\d+", text)
+    if not digits:
+        return None
+    value = int(digits[0])
+    for code in known:
+        parts = re.fullmatch(r"(\D*)(\d+)", code)
+        if parts is not None and int(parts.group(2)) == value:
+            return code
+    return None
+
+
+def _review_bool(value: Any) -> bool:
+    """布尔取值归一：模型可能给真布尔，也可能给「是 / 否」「true / false」这类文本。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    return text in {"true", "yes", "1", "是", "有", "有效", "有增量"}
+
+
+def _review_int(value: Any) -> int:
+    """整数取值归一：取不到数字按 0 处理（次数缺失不该让整条重复度记录作废）。"""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    digits = re.findall(r"\d+", str(value))
+    return int(digits[0]) if digits else 0
+
+
 def normalise_review(payload: Any) -> tuple[dict[str, Any], list[str]]:
     """把模型返回的复盘对象归一为固定结构，并返回归一过程中的告警。
 
@@ -447,6 +559,9 @@ def normalise_review(payload: Any) -> tuple[dict[str, Any], list[str]]:
     result: dict[str, Any] = {
         "one_line": _review_text(pick("one_line")),
         "level_reason": _review_text(pick("level_reason")),
+        # 主题分布与一句话结论同属结构轮，且都不是列表字段；漏掉这里会让合并后的结论
+        # 少一节「内容主题分布」——它由程序按结构轮产出渲染，缺了不会有任何告警
+        "topic_distribution": _review_text(pick("topic_distribution")),
     }
     # 片段覆盖数由程序按真实结果写入（见 `tasks/review.py`），这里明确丢弃模型给的取值：
     # 模型看不到识别缺口，「它以为自己分析了多少片」不是可用的信息
@@ -454,15 +569,19 @@ def normalise_review(payload: Any) -> tuple[dict[str, Any], list[str]]:
         if field in lowered:
             warnings.append(f"模型返回了 {field}，该字段以程序按真实片段结果计算为准，已忽略")
 
-    # 分析等级：模型可能写「Level 2」「部分级」等变体，只认包含关键字的那三种
+    # 分析等级：模型可能写「Level 2」「部分级」等变体，只认包含关键字的那三种。
+    # 字段**缺失**不该告警：分轮复盘里只有结构轮带这个字段，检核 / 归因 / 金句轮的契约里
+    # 根本没有它，若按「无法识别」记账，每轮都会凭空多出一条与实际无关的告警，把真正的
+    # 问题淹掉。只有「给了值但认不出来」才值得记。
     raw_level = _review_text(pick("analysis_level"))
     level = next((candidate for candidate in REVIEW_LEVELS if candidate in raw_level), None)
     if level is None:
         level = REVIEW_DEFAULT_LEVEL
-        warnings.append(f"分析等级取值无法识别（{raw_level or '缺失'}），按「{level}」处理")
+        if raw_level:
+            warnings.append(f"分析等级取值无法识别（{raw_level}），按「{level}」处理")
     result["analysis_level"] = level
 
-    for field in ("key_events", "findings", "top_issues", "next_actions", "missing_info"):
+    for field in ("key_events", "findings", "top_issues", "next_actions", "missing_info", "quotes", "violations", "repetition"):
         if field == "missing_info":
             raw = pick(field)
             items = raw if isinstance(raw, list) else ([raw] if raw else [])
@@ -478,11 +597,24 @@ def normalise_review(payload: Any) -> tuple[dict[str, Any], list[str]]:
         normalised: list[dict[str, Any]] = []
         for position, item in enumerate(items, start=1):
             aliases = _REVIEW_ITEM_ALIASES[field]
-            entry = {name: _review_text(_review_pick(item, keys)) for name, keys in aliases.items()}
+            entry: dict[str, Any] = {}
+            for name, keys in aliases.items():
+                value = _review_pick(item, keys)
+                # 编号列表与布尔、数值字段不能走文本归一：文本归一会把列表串成字符串、
+                # 把布尔抹成空串，编号一旦变成「['04']」这样的字符串就再也对不上数据源
+                if name in ("principle_codes", "script_codes"):
+                    known = MIND_SET_CODES if name == "principle_codes" else SAMPLE_CODES
+                    entry[name] = _review_codes(value, known, field=f"{field}.{name}", warnings=warnings)
+                elif name == "has_increment":
+                    entry[name] = _review_bool(value)
+                elif name == "count":
+                    entry[name] = _review_int(value)
+                else:
+                    entry[name] = _review_text(value)
             for time_field in ("start_seconds", "end_seconds"):
                 if time_field in entry:
                     entry[time_field] = _review_seconds(_review_pick(item, aliases[time_field]))
-            if not any(entry.get(name) for name in ("summary", "judgement", "problem", "goal")):
+            if not any(entry.get(name) for name in ("summary", "judgement", "problem", "goal", "text", "item", "term")):
                 warnings.append(f"{field} 第 {position} 条缺少有效内容，已丢弃")
                 continue
             normalised.append(entry)

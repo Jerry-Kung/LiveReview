@@ -25,7 +25,8 @@ from app.models import (
     UNDERSTANDING_STATUS_SUCCEEDED,
     Task,
 )
-from app.tasks.review import merge_reviews
+from app.llm import PASS_ATTRIBUTION, PASS_CHECKS, PASS_QUOTES, PASS_STRUCTURE, REVIEW_PASSES
+from app.tasks.review import merge_passes
 from app.transcript import ClipBlock, TranscriptSummary
 from tests.fake_llm import SAMPLE_REVIEW, BoomError, FakeReviewClient, json_output, review_output
 from tests.test_uploads import _create, _upload_all
@@ -133,18 +134,22 @@ def test_review_produces_structured_result(client: TestClient, model: FakeReview
 
 
 def test_review_prompt_carries_guideline_and_transcript(client: TestClient, model: FakeReviewClient):
-    """送模型的两段提示词：system 是裁剪后的准则，user 是整场转写与覆盖面。"""
+    """送模型的两段提示词：system 是裁剪后的准则，user 是整场转写与覆盖面。
+
+    V0.8.0 起一次复盘是**多轮专项调用**，因此这里按「结构轮」的那次调用断言——它是每一次
+    复盘的第一轮，也是公共准则最完整的一份（其余轮次在其上追加本轮题面）。
+    """
     task_id = _prepare(client)
     _understood(client, task_id)
     assert client.post(f"/api/tasks/{task_id}/review").status_code == 202
 
-    assert len(model.calls) == 1
+    assert len(model.calls) == len(REVIEW_PASSES)
     call = model.calls[0]
-    # 准则的可识别要点：业务链路、表达方式分类、证据分级、输出契约
+    # 准则的可识别要点：业务链路、表达方式分类、证据分级、结构轮的输出契约
     assert "留资" in call["system_prompt"]
     assert "参数直给" in call["system_prompt"]
     assert "高置信推断" in call["system_prompt"]
-    assert "top_issues" in call["system_prompt"]
+    assert "key_events" in call["system_prompt"]
     # 不可观测的部分必须已被裁掉：没有经营数据就不该出现在准则里
     assert "巨懂车" not in call["system_prompt"]
     assert "OCR" not in call["system_prompt"]
@@ -152,6 +157,18 @@ def test_review_prompt_carries_guideline_and_transcript(client: TestClient, mode
     assert "语音转写全文" in call["user_prompt"]
     assert "欢迎来到直播间" in call["user_prompt"]
     assert "片段：共" in call["user_prompt"]
+
+    # 检核轮的题面里带着心法清单、话术样板库与违规词库——这三份是编号引用的依据
+    checks_call = model.calls[1]
+    assert "八爪鱼" in checks_call["system_prompt"]
+    assert "每当你周末想带家人" in checks_call["system_prompt"]
+    assert "全网最低" in checks_call["system_prompt"]
+    assert "心法3" in checks_call["system_prompt"]
+
+    # 归因轮不吃转写，吃的是前两轮的结构化产出
+    attribution_call = model.calls[2]
+    assert "前序轮次" in attribution_call["user_prompt"]
+    assert "语音转写全文" not in attribution_call["user_prompt"]
 
 
 def test_review_input_includes_tone_and_failed_clips(
@@ -191,7 +208,9 @@ def test_review_level_is_corrected_by_coverage():
     payload, warnings = normalise_review({**SAMPLE_REVIEW, "analysis_level": "完整"})
     assert warnings == []
 
-    merged = merge_reviews([ReviewResult(payload=payload)], summary=_summary(failed=1, succeeded=1))
+    merged = merge_passes(
+        {PASS_STRUCTURE: payload}, summary=_summary(failed=1, succeeded=1)
+    )
     assert merged["analysis_level"] == "部分"
     # 依据由程序按真实覆盖面重写，并保留模型自己的判断
     assert "1/2 片识别失败" in merged["level_reason"]
@@ -201,7 +220,9 @@ def test_review_level_is_corrected_by_coverage():
 def test_review_level_downgraded_when_coverage_too_low():
     """覆盖不足时降到「受限」：只给主题与结构的观察。"""
     payload, _ = normalise_review({**SAMPLE_REVIEW, "analysis_level": "完整"})
-    merged = merge_reviews([ReviewResult(payload=payload)], summary=_summary(failed=3, succeeded=1))
+    merged = merge_passes(
+        {PASS_STRUCTURE: payload}, summary=_summary(failed=3, succeeded=1)
+    )
     assert merged["analysis_level"] == "受限"
 
 
@@ -254,7 +275,8 @@ def test_review_rerun_replaces_previous_result(client: TestClient, model: FakeRe
     second = _review(client, task_id)
     assert second["result"]["one_line"] == "第二次复盘的结论"
     assert second["result"]["one_line"] != first
-    assert len(model.calls) == 2
+    # 两轮复盘各跑一遍全部轮次：重跑清空分轮产物，因此第二次也是四轮全跑
+    assert len(model.calls) == 2 * len(REVIEW_PASSES)
 
 
 def test_review_conflict_while_running(
@@ -313,6 +335,7 @@ def test_review_batches_long_transcript(client: TestClient, model: FakeReviewCli
 
     assert len(model.calls) > 1
     review = _review(client, task_id)
+    # 调用次数即 `batch_count`：多轮之后它不再等于「转写批数」，而是本次花掉的模型调用总数
     assert review["batch_count"] == len(model.calls)
     assert review["result"]["batch_count"] > 1
     # 多批时无法保留单批的结论，合并结果给出分段的说明，且两批的原话都留了下来
@@ -326,8 +349,11 @@ def test_review_batches_long_transcript(client: TestClient, model: FakeReviewCli
         "F 权益政策",
     ]
     assert len(review["result"]["top_issues"]) <= 3
-    # 每批输入都声明了「这只是全场的一部分」
-    assert all("分批输入" in call["user_prompt"] for call in model.calls)
+    # 吃转写的每一轮、每一批输入都声明了「这只是全场的一部分」；
+    # 归因轮不吃转写（它吃前序产出），因此不在断言范围内
+    transcript_calls = [call for call in model.calls if "语音转写全文" in call["user_prompt"]]
+    assert transcript_calls
+    assert all("分批输入" in call["user_prompt"] for call in transcript_calls)
 
 
 def test_review_download_markdown(client: TestClient, model: FakeReviewClient):
@@ -345,6 +371,51 @@ def test_review_download_markdown(client: TestClient, model: FakeReviewClient):
     assert "TOP 问题" in body
     assert "下一场实验动作" in body
     assert "本场不足以判断" in body
+
+
+def test_review_markdown_carries_v08_sections(client: TestClient, model: FakeReviewClient):
+    """V0.8.0 新增的板块也要进报告，且编号在报告内部自带原文对照。
+
+    报告会被带出系统讨论（转发、打印、贴进会议），读的人手里没有界面可以点开编号。
+    因此「心法3」「样板 04」这类引用必须附上原文，否则对收件人就是一句暗语。
+    """
+    full = {
+        **SAMPLE_REVIEW,
+        "topic_distribution": "以 A 产品讲解为主，F 权益政策集中在中段",
+        "repetition": [
+            {"item": "900mm 涉水", "count": 4, "has_increment": False, "verdict": "同质复读", "times": "03:20 / 21:40"}
+        ],
+        "violations": [
+            {"term": "全网最低", "quote": "我们全网最低价", "replacement": "我们店里这价", "start_seconds": 300.0}
+        ],
+        "quotes": [
+            {"start_seconds": 620.0, "text": "国有大事，必有猛士", "category": "品牌叙事", "effect": "契合品牌调性"}
+        ],
+        "findings": [{**SAMPLE_REVIEW["findings"][0], "principle_codes": ["心法3"]}],
+        "top_issues": [
+            {**SAMPLE_REVIEW["top_issues"][0], "principle_codes": ["心法7"], "script_codes": ["04"]}
+        ],
+        "next_actions": [{**SAMPLE_REVIEW["next_actions"][0], "script_codes": ["12"]}],
+    }
+    set_script(model, full, repeat_last=True)
+
+    task_id = _prepare(client)
+    _understood(client, task_id)
+    assert client.post(f"/api/tasks/{task_id}/review").status_code == 202
+
+    body = client.get(f"/api/tasks/{task_id}/review.md").text
+    assert "## 内容主题分布" in body
+    assert "## 内容重复度" in body
+    assert "共 4 次" in body
+    assert "## 违规表达与替换" in body
+    assert "全网最低" in body and "我们店里这价" in body
+    assert "## 本场金句收录" in body
+    assert "国有大事，必有猛士" in body
+    # 编号在正文里随条目标注，并在文末附上原文对照
+    assert "心法：心法3" in body
+    assert "## 引用的心法与话术样板" in body
+    assert "每分钟放钩子" in body
+    assert "需求逼单" in body
 
 
 def test_review_download_rejected_before_review(client: TestClient, model: FakeReviewClient):
