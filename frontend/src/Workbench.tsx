@@ -390,6 +390,7 @@ export default function Workbench({
   onSection,
   onTaskChange,
   onBackToList,
+  autoPipeline = false,
 }: {
   /** 非空时展示这条历史任务，否则展示本次上传流程。 */
   taskId: string | null;
@@ -401,6 +402,15 @@ export default function Workbench({
   onTaskChange?: () => void;
   /** 回到新建任务页（详情页的「返回任务列表」） */
   onBackToList: () => void;
+  /**
+   * 全自动流程模式是否开启（V0.7.0）：只用于上传页右栏的说明文案。
+   *
+   * 由壳层读一次设置接口后传入。本组件不自己读设置：上传状态机只关心「文件传没传完」，
+   * 多一条会失败的请求只会让上传页多一种出错的可能。取不到时按「关闭」讲（服务端默认是
+   * 开启，见 `App.tsx`）：保守的那套说明只是多让用户点两个按钮，而把手工流程讲成全自动会
+   * 让人一直等一个不会出现的推进。
+   */
+  autoPipeline?: boolean;
 }) {
   const [state, setState] = useState<UploadState>(INITIAL);
   const [task, setTask] = useState<Task | null>(null);
@@ -773,6 +783,7 @@ export default function Workbench({
           dragOver={dragOver}
           inputId={inputId}
           inputRef={fileRef}
+          autoPipeline={autoPipeline}
           onPick={onPick}
           onFile={state.phase === "unfinished" ? handleContinueFile : handleFile}
           onDragOver={onDragOver}

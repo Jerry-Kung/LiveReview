@@ -5,8 +5,12 @@
  * 结果；登录体系与多用户任务归属尚未实现，因此列表列出的是本服务上的全部任务，不区分账号，
  * 界面上不为此加说明性标注。
  *
- * 「数据分析」「设置」是导航结构上的预留入口，本版没有对应后端能力，点击不跳转，并用
- * 「未接入」明确说明——不做空白页伪装成功能，也不把它们藏起来让导航只剩一项。
+ * 「数据分析」是导航结构上的预留入口，本版没有对应后端能力，点击不跳转，并用「未接入」
+ * 明确说明——不做空白页伪装成功能，也不把它藏起来让导航只剩一项。
+ *
+ * 「设置」（V0.7.0）已接入：全自动流程模式的开关在那一页，写操作只对管理员开放，但入口
+ * 对所有账号显示——普通账号也需要知道自己上传后会不会被自动跑完，藏起入口只会让人无从得知。
+ * 因此这一项不带「未接入」标签，也不按角色隐藏。
  *
  * 「账号管理」（V0.5.2）已接入，但只对管理员显示：这是导航层面的可见性收敛，不是权限
  * 本身——后端那一组接口对非管理员一律 403，普通账号手敲 `#/accounts` 也只会看到说明页。
@@ -16,9 +20,18 @@
  */
 
 import type { Task } from "./api";
-import { PLACEHOLDER, taskStatusLabel, taskStatusTone } from "./format";
+import { PLACEHOLDER, taskDisplayStatus, taskStatusLabel, taskStatusTone } from "./format";
 import { IconChart, IconList, IconSettings, IconUsers } from "./icons";
 import type { NavKey } from "./routing";
+
+/**
+ * 侧栏那行状态文案读的是**整体进度**而不是切分链：`task.status` 在切分完成时就变成
+ * `succeeded`，而识别与复盘此时可能刚入队（V0.7.2）。合成规则见 `taskDisplayStatus`。
+ */
+export function taskStatusText(task: Task): { label: string; tone: "ok" | "busy" | "warn" | "error" } {
+  const status = taskDisplayStatus(task);
+  return { label: taskStatusLabel(status), tone: taskStatusTone(status) };
+}
 
 /** 侧栏筛选：文件名是用户手里唯一认得出的标识，因此只按文件名匹配。 */
 export function filterTasks(tasks: Task[], query: string): Task[] {
@@ -49,6 +62,8 @@ export default function Sidebar({
   isAdmin: boolean;
   /** 页眉搜索框的筛选词 */
   query: string;
+  // 注意：`isAdmin` 不参与「设置」那一项的渲染——设置页对所有账号开放（写操作仅管理员），
+  // 入口藏起来会让普通账号无从得知自己上传后会不会被自动跑完。
   onOpenTask: (taskId: string) => void;
   onSelectNav: (key: NavKey) => void;
 }) {
@@ -95,7 +110,6 @@ export default function Sidebar({
         >
           <IconSettings />
           设置
-          <span className="rail-item-tag">未接入</span>
         </button>
       </nav>
 
@@ -118,7 +132,9 @@ export default function Sidebar({
 
         {!loading && error === null && visible.length > 0 && (
           <ul className="rail-list">
-            {visible.map((task) => (
+            {visible.map((task) => {
+              const status = taskStatusText(task);
+              return (
               <li key={task.id}>
                 <button
                   type="button"
@@ -128,14 +144,15 @@ export default function Sidebar({
                 >
                   <span className="recent-name">{task.filename ?? "未命名录屏"}</span>
                   <span className="recent-meta">
-                    <span className="status" data-tone={taskStatusTone(task.status)}>
-                      {taskStatusLabel(task.status)}
+                    <span className="status" data-tone={status.tone}>
+                      {status.label}
                     </span>
                     <span className="recent-stamp num">{formatStamp(task.created_at)}</span>
                   </span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>

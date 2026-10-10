@@ -193,6 +193,9 @@ class ReviewFindingResponse(BaseModel):
 
     `evidence_level` 取值为【事实】/【高置信推断】/【待验证假设】三档，取值口径见复盘准则；
     界面据此提示用户这条结论能信到什么程度。
+
+    `principle_codes`（V0.8.0）是这条判断对应的心法编号（如「心法3」）：准则要求逐维检核
+    12 条心法并说明缺失了哪几条，编号让「缺了什么」可被界面翻成心法原文对照。
     """
 
     dimension: str = ""
@@ -201,24 +204,81 @@ class ReviewFindingResponse(BaseModel):
     evidence: str = ""
     start_seconds: float | None = None
     suggestion: str = ""
+    principle_codes: list[str] = Field(default_factory=list)
 
 
 class ReviewIssueResponse(BaseModel):
-    """一条 TOP 问题：问题、证据、影响、归因与下一场动作。"""
+    """一条 TOP 问题：问题、证据、影响、归因与下一场动作。
+
+    `principle_codes` 与 `script_codes`（V0.8.0）分别指向缺失的心法与可照念的话术样板编号；
+    准则要求「下一场动作必须引用具体话术样板编号或心法框架」，这两个字段就是那条引用的落点。
+    """
 
     problem: str = ""
     evidence: str = ""
     impact: str = ""
     root_cause: str = ""
     action: str = ""
+    principle_codes: list[str] = Field(default_factory=list)
+    script_codes: list[str] = Field(default_factory=list)
 
 
 class ReviewActionResponse(BaseModel):
-    """一条下一场实验动作：目标、做法与观察项。"""
+    """一条下一场实验动作。
+
+    V0.8.0 按准则 §十七 补齐四段：`current_approach`（本场怎么做的）、`change_reason`
+    （与之前实验的差异及换方向的原因）、`success_criteria`（量化成功标准）、`script_codes`
+    （引用的心法话术样板编号）。只给「目标 + 怎么做」不足以让主播知道这一步与上一场有何不同。
+    """
 
     goal: str = ""
     how: str = ""
     observe: str = ""
+    current_approach: str = ""
+    change_reason: str = ""
+    success_criteria: str = ""
+    script_codes: list[str] = Field(default_factory=list)
+
+
+class ReviewQuoteResponse(BaseModel):
+    """一句本场优秀话术（V0.8.0，准则 §十八 报告 A 的「本场金句收录」）。
+
+    本系统没有话术库（跨场次存储不在本版范围），因此这里只做**单场留痕**：把值得记下来的
+    原话连同时间、场景与效果评价留在结论里，供人工摘取，不承诺入库与跨场检索。
+    """
+
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    text: str = ""
+    category: str = ""
+    scene: str = ""
+    effect: str = ""
+
+
+class ReviewViolationResponse(BaseModel):
+    """一处违规表达与它的合规替换（V0.8.0，准则 §十四.5 与 §二十四）。
+
+    违规词库是纯文本可检项，因此这条由程序把词库喂给模型后逐条比对得出，不依赖经营数据。
+    """
+
+    term: str = ""
+    quote: str = ""
+    replacement: str = ""
+    start_seconds: float | None = None
+
+
+class ReviewRepetitionResponse(BaseModel):
+    """一个卖点的重复情况（V0.8.0，准则 §十四.2 内容重复度专项）。
+
+    `has_increment` 区分「有效重复」（每次讲都有新增信息）与「无效重复」（同质复读），后者
+    达到 3 次即计入问题项——这是准则里明确要求每场执行的检查，只靠转写就能完成。
+    """
+
+    item: str = ""
+    count: int = 0
+    has_increment: bool = False
+    verdict: str = ""
+    times: str = ""
 
 
 class ReviewResultResponse(BaseModel):
@@ -227,6 +287,7 @@ class ReviewResultResponse(BaseModel):
     one_line: str = ""
     analysis_level: str = ""
     level_reason: str = ""
+    topic_distribution: str = ""
     batch_count: int = 1
     clip_count: int = 0
     succeeded_clip_count: int = 0
@@ -236,6 +297,11 @@ class ReviewResultResponse(BaseModel):
     top_issues: list[ReviewIssueResponse] = Field(default_factory=list)
     next_actions: list[ReviewActionResponse] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
+    quotes: list[ReviewQuoteResponse] = Field(default_factory=list)
+    violations: list[ReviewViolationResponse] = Field(default_factory=list)
+    repetition: list[ReviewRepetitionResponse] = Field(default_factory=list)
+    # 本场实际跑完的轮次（V0.8.0）：分轮复盘的可解释项，出问题时先看它
+    passes_run: list[str] = Field(default_factory=list)
 
 
 class TaskReviewResponse(BaseModel):
@@ -292,6 +358,9 @@ class TaskResponse(BaseModel):
     # 它的布尔视图，供前端一处判断。过期只影响视频，转写与复盘结论照常可用。
     expired_at: datetime | None = None
     video_expired: bool = False
+    # 全自动流程模式（V0.7.0）：这条任务**创建时**的开关快照，供详情页标注与费用追溯。
+    # 不是当前开关值——改开关不会改变已创建任务的既有行为。
+    auto_run: bool = False
 
 
 class TaskListResponse(BaseModel):
@@ -374,3 +443,76 @@ class StatusResponse(BaseModel):
     llm_missing: list[str] = Field(default_factory=list)
     auth_users: int
     auth_warnings: list[str] = Field(default_factory=list)
+
+
+# ---- 系统设置（V0.7.0）----
+
+
+class SettingsResponse(BaseModel):
+    """系统设置。读对所有登录账号开放，写只对管理员。
+
+    `auto_pipeline` 是唯一可改的项，默认值取「开启」（V0.7.1，见 `app/models.py` 的列默认值与
+    `app/settings_store.py` 的无行回落）；其余字段是**只读的运行参数**，当前由环境变量决定，
+    放在这里是因为它们决定了「打开开关意味着什么」——用户需要知道全自动会按哪个模型、哪种
+    切片粒度花钱。模型未配置时 `model_name` 为 null 而 `llm_configured` 为假，界面据此
+    提示「开了也不会自动识别」。
+    """
+
+    auto_pipeline: bool
+    model_name: str | None = None
+    llm_configured: bool = False
+    split_max_duration_seconds: int
+    split_max_clip_bytes: int
+    video_ttl_seconds: int
+
+
+class SettingsUpdateRequest(BaseModel):
+    """修改系统设置。只带要改的字段，未提供的保持原值。"""
+
+    auto_pipeline: bool
+
+
+# ---- 复盘准则的编号对照表（V0.8.0）----
+
+
+class GuidelineMindsetResponse(BaseModel):
+    """一条心法：编号、名称、检核项与相关话术样板编号。
+
+    只回显检核项（`check`），不回显准则里的 `improve` 原文：界面要回答的是「这条心法检核
+    什么」，而「该怎么改进」必须由复盘结论结合本场实际给出，照抄准则里的通用改法正是准则
+    §二十五 第 11 条要禁止的空话。
+    """
+
+    code: str
+    name: str
+    check: str
+    sample_codes: list[str] = Field(default_factory=list)
+
+
+class GuidelineSampleResponse(BaseModel):
+    """一句话术样板：编号、场景分类、用法标签与原文。"""
+
+    code: str
+    category: str
+    usage: str = ""
+    text: str
+
+
+class GuidelineTermResponse(BaseModel):
+    """一条违规表达与它的合规替换。"""
+
+    term: str
+    replacement: str
+
+
+class GuidelineResponse(BaseModel):
+    """复盘准则的编号对照表。
+
+    存在的理由：复盘结论里写「使用话术样板 04」，主播与运营必须能查到 04 说的是什么，否则
+    报告就是一句查不到出处的暗语。数据与提示词同源（`app/llm/mindset.py`），因此这里不做
+    任何加工，只是把同一份内容换个形状发出去。
+    """
+
+    mindsets: list[GuidelineMindsetResponse] = Field(default_factory=list)
+    samples: list[GuidelineSampleResponse] = Field(default_factory=list)
+    violations: list[GuidelineTermResponse] = Field(default_factory=list)

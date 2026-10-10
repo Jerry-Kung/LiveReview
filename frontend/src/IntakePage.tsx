@@ -18,8 +18,12 @@ import { formatBytes } from "./format";
  *
  * 按钮名与页面名照抄界面文案，用户照着点即可。刻意不写后台做了什么——那些环节由系统
  * 自动完成，用户既看不到也影响不了，摆在这里只会占掉首屏最显眼的一栏。
+ *
+ * V0.7.0 起这一栏随「全自动流程模式」切换：开关打开时识别与复盘由系统接手，第三步与
+ * 第四步就不再是「要点的按钮」，而是「会自动发生的事」。两套步骤各写一份而不是把开关
+ * 插进步骤文案里——用户照着做的那条路径只有一条，混着讲会让人分不清哪几句要做。
  */
-const GUIDE_STEPS = [
+const GUIDE_STEPS_MANUAL = [
   { title: "上传录屏", note: "支持 MP4 / TS，建议单个文件不超过 2 GB，更大的文件处理时间会明显变长" },
   { title: "等待视频处理", note: "系统自动解析与切片，完成后进入任务详情" },
   { title: "开始内容识别", note: "在「内容理解」页点「开始识别语音」" },
@@ -27,19 +31,33 @@ const GUIDE_STEPS = [
   { title: "查看与下载结论", note: "点「查看报告」下载 Markdown 复盘报告" },
 ] as const;
 
+const GUIDE_STEPS_AUTO = [
+  { title: "上传录屏", note: "支持 MP4 / TS，建议单个文件不超过 2 GB，更大的文件处理时间会明显变长" },
+  { title: "等待自动处理", note: "解析与切片完成后，系统会自动接着识别与复盘" },
+  { title: "识别与复盘自动进行", note: "无需点击，可以关闭页面，稍后回来看结果" },
+  { title: "查看与下载结论", note: "识别与复盘跑完后，点「查看报告」下载 Markdown 复盘报告" },
+] as const;
+
 export type IntakePhase = "idle" | "loading" | "unfinished" | "uploading" | "assembling" | "error";
 
 /** 使用说明栏：上传区右侧的固定内容，任何时候都在。 */
-function UsageGuide() {
+function UsageGuide({ autoPipeline }: { autoPipeline: boolean }) {
+  const steps = autoPipeline ? GUIDE_STEPS_AUTO : GUIDE_STEPS_MANUAL;
+
   return (
     <aside className="panel" aria-label="使用说明">
       <div className="panel-head">
         <IconInfo size={18} />
         <h2 className="panel-title">使用说明</h2>
+        <span className="panel-head-side">
+          <span className="status" data-tone={autoPipeline ? "ok" : undefined}>
+            {autoPipeline ? "全自动" : "手工"}
+          </span>
+        </span>
       </div>
 
       <ol className="steps">
-        {GUIDE_STEPS.map((step, index) => (
+        {steps.map((step, index) => (
           <li className="step" key={step.title}>
             <span className="step-no num" aria-hidden="true">
               {String(index + 1).padStart(2, "0")}
@@ -54,7 +72,9 @@ function UsageGuide() {
 
       <p className="callout">
         <IconInfo size={16} />
-        识别与复盘都要点一下按钮才会开始。视频保留 72 小时，转写与复盘结论会一直保留。
+        {autoPipeline
+          ? "已开启全自动流程模式：上传并处理完成后会自动识别与复盘，不必再点按钮，关闭页面也不影响推进。视频保留 72 小时，转写与复盘结论会一直保留。"
+          : "识别与复盘都要点一下按钮才会开始。视频保留 72 小时，转写与复盘结论会一直保留。"}
       </p>
     </aside>
   );
@@ -71,6 +91,7 @@ export default function IntakePage({
   dragOver,
   inputId,
   inputRef,
+  autoPipeline,
   onPick,
   onFile,
   onDragOver,
@@ -89,6 +110,14 @@ export default function IntakePage({
   /** 文件输入框的 id：label 通过它关联，整块上传区都可点击 */
   inputId: string;
   inputRef: React.RefObject<HTMLInputElement>;
+  /**
+   * 全自动流程模式是否开启（V0.7.0）：决定右栏使用说明讲哪条路径。
+   *
+   * 由壳层读一次设置接口后传入。取不到时按「关闭」讲（服务端默认是开启，见 `App.tsx` 的
+   * 说明）：保守的那一套只是多让用户点两个按钮，而把手工流程讲成全自动会让人一直等一个
+   * 不会出现的推进。
+   */
+  autoPipeline: boolean;
   /** 点击「选择文件」按钮：交给同一个文件输入框 */
   onPick: () => void;
   onFile: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -259,7 +288,7 @@ export default function IntakePage({
           </div>
         </section>
 
-        <UsageGuide />
+        <UsageGuide autoPipeline={autoPipeline} />
       </div>
     </div>
   );

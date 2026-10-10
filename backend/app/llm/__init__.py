@@ -43,9 +43,14 @@ from app.llm.parsing import (
 )
 from app.llm.prompts import DEFAULT_UNDERSTANDING_PROMPT, build_prompt
 from app.llm.review_prompts import (
-    REVIEW_SYSTEM_PROMPT,
-    build_review_system_prompt,
-    build_review_user_prompt,
+    PASS_ATTRIBUTION,
+    PASS_CHECKS,
+    PASS_QUOTES,
+    PASS_STRUCTURE,
+    REVIEW_PASSES,
+    TRANSCRIPT_PASSES,
+    build_pass_system_prompt,
+    build_pass_user_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,10 +132,15 @@ __all__ = [
     "DEFAULT_UNDERSTANDING_PROMPT",
     "REVIEW_SKIPPED",
     "REVIEW_STATUS_FAILED",
+    "PASS_ATTRIBUTION",
+    "PASS_CHECKS",
+    "PASS_QUOTES",
+    "PASS_STRUCTURE",
+    "REVIEW_PASSES",
     "REVIEW_STATUS_PENDING",
     "REVIEW_STATUS_RUNNING",
     "REVIEW_STATUS_SUCCEEDED",
-    "REVIEW_SYSTEM_PROMPT",
+    "TRANSCRIPT_PASSES",
     "TERMINAL_REVIEW_STATUSES",
     "TERMINAL_UNDERSTANDING_STATUSES",
     "UNDERSTANDING_SKIPPED",
@@ -156,8 +166,8 @@ __all__ = [
     "build_client",
     "build_prompt",
     "build_review_client",
-    "build_review_system_prompt",
-    "build_review_user_prompt",
+    "build_pass_system_prompt",
+    "build_pass_user_prompt",
     "describe_error",
     "get_review_client",
     "get_understanding_client",

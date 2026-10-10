@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "LiveReview"
-    app_version: str = "0.6.1"
+    app_version: str = "0.8.0"
     app_env: str = "development"
     database_url: str = "sqlite:///./data/liverreview.db"
     log_level: str = "INFO"

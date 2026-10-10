@@ -14,6 +14,9 @@ export const TASK_LABELS: Record<string, string> = {
   uploading: "上传中",
   uploaded: "待处理",
   processing: "处理中",
+  // 合并展示态：切分已完成、识别或复盘仍在跑（见 `taskDisplayStatus`）。
+  // 不是后端的 `task.status` 取值，只在界面上出现。
+  analyzing: "分析中",
   succeeded: "已完成",
   failed: "失败",
 };
@@ -70,6 +73,27 @@ export function taskStatusLabel(status: string): string {
 }
 
 /**
+ * 这条任务整体跑到哪了（V0.7.2）：切分链状态与后续阶段的合并展示取值。
+ *
+ * `task.status` 按设计只描述切分链（`uploading / uploaded / processing / succeeded / failed`），
+ * 识别与复盘各写自己的字段。侧栏与详情页头部要回答的却是「这条任务整体完了没有」，
+ * 只读切分链会在切分完成的那一刻就报「已完成」，而识别与复盘还在跑。这里把三段合成
+ * 一个取值：切分未结束时原样返回，任一后续阶段在进行中就报「分析中」，两段都收尾才是
+ * 「已完成」。
+ *
+ * 只认 `running`，不把 `pending` 也算成进行中：入队当刻就落 `running`（后端
+ * `Task.mark_*_running()`），而 `pending` 既可能是「还没轮到」也可能是「链路已停」
+ * （开关被关、模型未配置、复盘无输入），认了它会让停在半路的任务永远显示「分析中」。
+ */
+export function taskDisplayStatus(task: Task): string {
+  if (task.status !== "succeeded") return task.status;
+  const understanding = task.understanding?.status;
+  const review = task.review?.status;
+  if (understanding === "running" || review === "running") return "analyzing";
+  return task.status;
+}
+
+/**
  * 视频过期后的状态文案（V0.6.1）。
  *
  * 不复用 `TASK_LABELS`：过期是独立于切分状态的另一件事（`status` 仍可能是 succeeded），
@@ -92,6 +116,7 @@ export function taskStatusTone(status: string): "ok" | "busy" | "warn" | "error"
   if (status === "succeeded") return "ok";
   if (status === "failed") return "error";
   if (status === "processing" || status === "uploading") return "busy";
+  if (status === "analyzing") return "busy";
   return "warn";
 }
 

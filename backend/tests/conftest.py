@@ -42,6 +42,32 @@ def hash_for_test(password: str) -> str:
 
 
 @pytest.fixture(autouse=True)
+def manual_auto_pipeline(request, db_session_factory):
+    """把全自动流程开关显式关掉，让既有链路用例继续在「手工模式」下跑。
+
+    开关的无行默认值是**开启**（V0.7.1），而本套件里绝大多数用例关心的是某一条链路本身
+    （切分、识别、复盘、鉴权、清理），它们在手工模式下逐段触发阶段才能被单点观察；默认开着
+    会让每次上传都自动往下串，这些用例的断言就从「这一阶段的行为」变成「整条链的终点」。
+
+    因此这里统一写一行「关闭」——它模拟的是「管理员把开关关掉了」的真实部署，而不是一个
+    测试专用的旁路：判据链（快照 + 当前开关）原样生效。真正要验证默认值本身的用例标
+    `real_default` 跳过这里，见 `test_settings_api.py` 与 `test_database.py`。
+
+    只在要用数据库的用例上写：本夹具依赖 `db_session_factory`，不碰库的纯单测不会因此
+    多建一个临时 SQLite。
+    """
+    if "real_default" in request.keywords:
+        return
+    from app.settings_store import write_auto_pipeline
+
+    db = db_session_factory()
+    try:
+        write_auto_pipeline(db, enabled=False, updated_by="tests")
+    finally:
+        db.close()
+
+
+@pytest.fixture(autouse=True)
 def fast_password_hashing(request, monkeypatch):
     """把建号与登录用的口令哈希迭代次数压到最小。
 
@@ -221,6 +247,11 @@ def _assemble_app(db_session_factory, test_settings: Settings, storage, monkeypa
     # 关掉线程池：任务在本进程内同步执行，测试无需等待后台线程
     monkeypatch.setattr("app.tasks.executor._get_executor", lambda: _SyncExecutor())
     monkeypatch.setattr("app.tasks.executor.SessionLocal", db_session_factory)
+    # 全自动串接（V0.7.0）由 `executor.run` 在每个阶段结束时调用：它自己开数据库会话、
+    # 自己取配置单例，与执行器同一套路数，因此两处都要指向测试对象——否则串接会连到本机
+    # 数据库上，测试里表现为「任务停在切分成功、识别从未开始」。
+    monkeypatch.setattr("app.tasks.chain.SessionLocal", db_session_factory)
+    monkeypatch.setattr("app.tasks.chain.get_settings", lambda: test_settings)
     # 任务体不走依赖注入，直接取配置单例；测试里指向假 ffprobe，避免依赖本机安装 FFmpeg
     monkeypatch.setattr("app.tasks.runner.get_settings", lambda: test_settings)
     # 识别链路的配置与存储同样走单例；存储已替换为 Mock，配置指向测试配置
@@ -273,6 +304,8 @@ def use_settings(monkeypatch, test_settings: Settings):
         monkeypatch.setattr("app.tasks.runner.get_settings", lambda: updated)
         monkeypatch.setattr("app.tasks.understanding.get_settings", lambda: updated)
         monkeypatch.setattr("app.tasks.review.get_settings", lambda: updated)
+        # 全自动串接也直接取配置单例（它要判 `llm_configured` 才决定要不要入队识别）
+        monkeypatch.setattr("app.tasks.chain.get_settings", lambda: updated)
         return updated
 
     return apply

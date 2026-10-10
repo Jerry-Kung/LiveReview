@@ -25,6 +25,7 @@ from app.schemas import (
     UploadCreateResponse,
     UploadStatusResponse,
 )
+from app.settings_store import read_auto_pipeline
 from app.storage import StorageError
 # 上传会话状态与任务状态同名不同义（会话的 `uploading` 指「还在收分片」），因此带前缀导入
 from app.tasks import STATUS_UPLOADING as TASK_UPLOADING
@@ -81,7 +82,12 @@ def create_upload(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UploadCreateResponse:
-    """创建上传会话；同时建立处于 `uploading` 状态的任务，使进度可被轮询。"""
+    """创建上传会话；同时建立处于 `uploading` 状态的任务，使进度可被轮询。
+
+    任务的 `auto_run` 在这一刻按**当前**开关取值写死（V0.7.0）：它记录的是「这条任务承诺以
+    什么模式跑」，而承诺一旦作出就不该被后续的开关变更追溯改写——关掉开关的人不该让一条
+    已经承诺全自动的任务半途停在识别之后。
+    """
     upload_id = uuid.uuid4().hex[:16]
     chunk_size = settings.upload_chunk_size
     total = chunk_store.chunk_count(payload.size, chunk_size)
@@ -100,6 +106,7 @@ def create_upload(
         progress=0,
         size=payload.size,
         upload_id=upload_id,
+        auto_run=read_auto_pipeline(db),
     )
     db.add(session)
     db.add(task)

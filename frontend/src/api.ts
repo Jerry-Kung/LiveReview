@@ -107,6 +107,8 @@ export type ReviewFinding = {
   evidence: string;
   start_seconds: number | null;
   suggestion: string;
+  /** 对应或缺失的心法编号，形如「心法3」 */
+  principle_codes: string[];
 };
 
 export type ReviewIssue = {
@@ -115,12 +117,50 @@ export type ReviewIssue = {
   impact: string;
   root_cause: string;
   action: string;
+  /** 缺失的心法编号 */
+  principle_codes: string[];
+  /** 可照念的话术样板编号，两位数字字符串 */
+  script_codes: string[];
 };
 
 export type ReviewAction = {
   goal: string;
   how: string;
   observe: string;
+  /** 本场是怎么做的 */
+  current_approach: string;
+  /** 为什么要换这个方向 */
+  change_reason: string;
+  /** 量化成功标准 */
+  success_criteria: string;
+  script_codes: string[];
+};
+
+/** 一句本场优秀话术。 */
+export type ReviewQuote = {
+  start_seconds: number | null;
+  end_seconds: number | null;
+  text: string;
+  category: string;
+  scene: string;
+  effect: string;
+};
+
+/** 一处违规表达与合规替换。 */
+export type ReviewViolation = {
+  term: string;
+  quote: string;
+  replacement: string;
+  start_seconds: number | null;
+};
+
+/** 一个卖点的重复情况。 */
+export type ReviewRepetition = {
+  item: string;
+  count: number;
+  has_increment: boolean;
+  verdict: string;
+  times: string;
 };
 
 /** 复盘结论本体：与后端归一后的结构一一对应。 */
@@ -129,6 +169,8 @@ export type ReviewResult = {
   /** 完整 / 部分 / 受限：由覆盖面与模型判断共同确定 */
   analysis_level: string;
   level_reason: string;
+  /** 本场内容主题分布的自由文字描述 */
+  topic_distribution: string;
   batch_count: number;
   clip_count: number;
   succeeded_clip_count: number;
@@ -138,6 +180,11 @@ export type ReviewResult = {
   top_issues: ReviewIssue[];
   next_actions: ReviewAction[];
   missing_info: string[];
+  quotes: ReviewQuote[];
+  violations: ReviewViolation[];
+  repetition: ReviewRepetition[];
+  /** 本场实际跑完的轮次（structure / checks / attribution / quotes） */
+  passes_run: string[];
 };
 
 /** 整场复盘结论：未复盘时 finished_at 为空，result 也可能为空。 */
@@ -221,6 +268,13 @@ export type Task = {
   expired_at: string | null;
   /** `expired_at` 的布尔视图：界面只在一处判断 */
   video_expired: boolean;
+  /**
+   * 全自动流程模式的任务快照（V0.7.0）：**创建这条任务时**开关是开着的。
+   *
+   * 它不是当前开关值——改开关不会改变已创建任务的既有行为，因此详情页的标注读这个字段，
+   * 不去问设置接口。
+   */
+  auto_run: boolean;
 };
 
 export type MissingChunks = {
@@ -410,10 +464,83 @@ export function deleteAccount(accountId: number): Promise<void> {
   return request<void>(`/api/accounts/${accountId}`, { method: "DELETE" });
 }
 
+/**
+ * 系统设置（V0.7.0）：读对所有登录账号开放，写只对管理员。
+ *
+ * 读走通用 `request<T>()`（401 照常触发「会话失效」回登录页）；写同样走它——非管理员会
+ * 拿到 403，而 403 的中文 `detail` 应当显示出来，而不是被当成掉线。
+ */
+
+export type Settings = {
+  /** 全自动流程模式：上传后自动接着识别与复盘。只影响此后新上传的任务 */
+  auto_pipeline: boolean;
+  /** 识别与复盘用的模型名；未配置时为 null */
+  model_name: string | null;
+  /** 模型是否已配置。为假时「开了也不会自动识别」，界面要提示 */
+  llm_configured: boolean;
+  /** 只读运行参数：切片时长上限（秒） */
+  split_max_duration_seconds: number;
+  /** 只读运行参数：单片体积上限（字节） */
+  split_max_clip_bytes: number;
+  /** 只读运行参数：云端视频保留期（秒） */
+  video_ttl_seconds: number;
+};
+
+export function fetchSettings(): Promise<Settings> {
+  return request<Settings>("/api/settings");
+}
+
+export function updateAutoPipeline(autoPipeline: boolean): Promise<Settings> {
+  return request<Settings>("/api/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_pipeline: autoPipeline }),
+  });
+}
+
 export function sliceFile(file: File, chunkSize: number): Blob[] {
   const parts: Blob[] = [];
   for (let offset = 0; offset < file.size; offset += chunkSize) {
     parts.push(file.slice(offset, Math.min(offset + chunkSize, file.size)));
   }
   return parts;
+}
+
+/**
+ * 复盘准则的编号对照表（V0.8.0）：读对所有登录账号开放。
+ *
+ * 复盘结论里会写「使用话术样板 04」「缺失心法3」这类带编号的指代，界面据此把编号翻成人能
+ * 看懂的原话。数据与提示词同源，因此这里不做任何筛选，一次全量取回。
+ */
+export type GuidelineMindset = {
+  /** 形如「心法3」；报告里按这个编号引用 */
+  code: string;
+  name: string;
+  /** 检核项：这条心法检核什么 */
+  check: string;
+  /** 相关话术样板编号 */
+  sample_codes: string[];
+};
+
+export type GuidelineSample = {
+  /** 两位编号字符串（如 "04"）；带前导零，因为报告里就是这么引用的 */
+  code: string;
+  category: string;
+  usage: string;
+  text: string;
+};
+
+export type GuidelineTerm = {
+  term: string;
+  replacement: string;
+};
+
+export type Guideline = {
+  mindsets: GuidelineMindset[];
+  samples: GuidelineSample[];
+  violations: GuidelineTerm[];
+};
+
+export function fetchGuideline(): Promise<Guideline> {
+  return request<Guideline>("/api/guideline");
 }

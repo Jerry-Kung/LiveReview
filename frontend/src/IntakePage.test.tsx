@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import IntakePage from "./IntakePage";
 
 /** 空态下的最小 props：本组用例只看右栏，上传区保持空闲即可。 */
-function renderIntake() {
+function renderIntake(autoPipeline = false) {
   return render(
     <IntakePage
       phase="idle"
@@ -27,6 +27,7 @@ function renderIntake() {
       dragOver={false}
       inputId="clip-file"
       inputRef={createRef<HTMLInputElement>()}
+      autoPipeline={autoPipeline}
       onPick={vi.fn()}
       onFile={vi.fn()}
       onDragOver={vi.fn()}
@@ -66,5 +67,16 @@ describe("新建任务页的使用说明（V0.6.3）", () => {
       expect(text).not.toContain(internal);
     }
     expect(screen.queryByRole("heading", { name: "处理说明" })).not.toBeInTheDocument();
+  });
+
+  it("全自动模式开启时，说明讲的是「会自动跑完」而不是「要点按钮」", () => {
+    // 开关打开后这两步由系统接手，再让用户去找按钮就是自相矛盾（V0.7.0）
+    renderIntake(true);
+
+    const guide = screen.getByRole("complementary", { name: "使用说明" });
+    expect(within(guide).getByText(/不必再点按钮/)).toBeInTheDocument();
+    expect(within(guide).getByText(/已开启全自动流程模式/)).toBeInTheDocument();
+    // 手工那套的关键句不该还留在页面上
+    expect(within(guide).queryByText(/识别与复盘都要点一下按钮才会开始/)).not.toBeInTheDocument();
   });
 });

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { resetPollIntervalMs, setPollIntervalMs } from "./polling";
-import { SESSION } from "./test/fixtures";
+import { SESSION, SETTINGS } from "./test/fixtures";
 
 const HEALTH = {
   status: "ok",
@@ -125,6 +125,8 @@ function mockApi(
     // 会话与任务列表都是壳层启动时就发的：默认给已登录 + 空列表，用例不必逐个声明
     if (url === "/api/auth/session") return jsonResponse(200, SESSION);
     if (url.startsWith("/api/tasks?")) return jsonResponse(200, { items: tasks });
+    // 壳层登录后会读一次设置（V0.7.0）：给哪个取值都行，本文件不验证文案切换
+    if (url === "/api/settings") return jsonResponse(200, SETTINGS);
     for (const route of routes) {
       const response = route(url, init);
       if (response) return response;
@@ -858,6 +860,70 @@ describe("工作台壳层", () => {
     expect(screen.getByLabelText("媒体信息")).toBeInTheDocument();
   });
 
+  /** 识别/复盘进行中的任务：切分链已是终态，但任务整体还没完。 */
+  const withUnderstanding = (status: string) => ({
+    ...taskResponse("succeeded", null, METADATA, COVERAGE, [clipResponse({ index: 0 })]),
+    understanding: {
+      status,
+      progress: status === "running" ? 40 : 100,
+      clip_count: 1,
+      segment_count: 2,
+      failed_clip_count: 0,
+      error: null,
+      started_at: "2026-01-01T00:20:00Z",
+      finished_at: status === "running" ? null : "2026-01-01T00:26:00Z",
+      model_name: "test-model",
+    },
+  });
+
+  it("切分完成但识别仍在跑时，侧栏不报「已完成」而是「分析中」", async () => {
+    // 回归（V0.7.2）：`task.status` 只描述切分链，切分一结束就是 succeeded。
+    // 侧栏若直接读它，识别与复盘还在跑的任务会被报成「已完成」。
+    const running = withUnderstanding("running");
+    mockApi([healthRoute], [running]);
+
+    await renderApp();
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    expect(item).toHaveTextContent("分析中");
+    expect(item).not.toHaveTextContent("已完成");
+  });
+
+  it("识别与复盘都收尾后，侧栏才回到「已完成」", async () => {
+    const settled = {
+      ...withUnderstanding("succeeded"),
+      review: {
+        status: "succeeded",
+        progress: 100,
+        clip_count: 1,
+        segment_count: 2,
+        batch_count: 1,
+        error: null,
+        started_at: "2026-01-01T00:30:00Z",
+        finished_at: "2026-01-01T00:32:00Z",
+        model_name: "test-model",
+        warnings: [],
+        result: null,
+      },
+    };
+    mockApi([healthRoute], [settled]);
+
+    await renderApp();
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    expect(item).toHaveTextContent("已完成");
+  });
+
+  it("切分链自身还在跑时，侧栏报的是切分链的状态", async () => {
+    // 派生只在切分结束时接管：处理中的任务不该被报成「分析中」
+    mockApi([healthRoute], [taskResponse("processing")]);
+
+    await renderApp();
+
+    const item = await screen.findByRole("button", { name: /live\.ts/ });
+    expect(item).toHaveTextContent("处理中");
+  });
+
   it("没有任务时给出空态说明", async () => {
     mockApi([healthRoute], []);
     await renderApp();
@@ -1234,13 +1300,42 @@ describe("复盘结论（V0.3）", () => {
     one_line: "本场讲清了越野场景，但报价前的价值翻译不足。",
     analysis_level: "部分",
     level_reason: "1/2 片识别失败，相关时段内容缺失",
-    batch_count: 1,
+    topic_distribution: "以 A 产品讲解为主，F 权益政策集中在中段，无 C 产品对比",
+    batch_count: 4,
     clip_count: 2,
     succeeded_clip_count: 1,
     failed_clip_count: 1,
     key_events: [
       { start_seconds: 12, end_seconds: 40, topic: "A 产品讲解", summary: "开场介绍三电" },
     ],
+    quotes: [
+      {
+        start_seconds: 620,
+        end_seconds: 640,
+        text: "国有大事，必有猛士",
+        category: "品牌叙事",
+        scene: "讲品牌故事处",
+        effect: "契合品牌调性，可复用",
+      },
+    ],
+    violations: [
+      {
+        term: "全网最低",
+        quote: "我们全网最低价",
+        replacement: "我们店里这价",
+        start_seconds: 300,
+      },
+    ],
+    repetition: [
+      {
+        item: "900mm 涉水",
+        count: 4,
+        has_increment: false,
+        verdict: "同质复读，计入问题",
+        times: "03:20 / 21:40",
+      },
+    ],
+    passes_run: ["structure", "checks", "attribution", "quotes"],
     findings: [
       {
         dimension: "产品讲解",
@@ -1249,6 +1344,7 @@ describe("复盘结论（V0.3）", () => {
         evidence: "电机功率 400 千瓦",
         start_seconds: 120,
         suggestion: "先讲越野场景里的通过性",
+        principle_codes: ["心法3"],
       },
     ],
     top_issues: [
@@ -1258,12 +1354,46 @@ describe("复盘结论（V0.3）", () => {
         impact: "留资前的信任建立环节",
         root_cause: "话术方法",
         action: "权益前先用 30 秒讲清三项核心价值",
+        principle_codes: ["心法7"],
+        script_codes: ["04"],
       },
     ],
     next_actions: [
-      { goal: "报价前完成价值翻译", how: "报价前 3 分钟按场景讲三项配置", observe: "是否在报价前完成翻译" },
+      {
+        goal: "报价前完成价值翻译",
+        current_approach: "报价即上权益，中间没有价值铺垫",
+        how: "报价前 3 分钟按场景讲三项配置",
+        change_reason: "上一场留资集中在报价后，说明价值没前置",
+        observe: "是否在报价前完成翻译",
+        success_criteria: "报价前的三分钟里至少完成两项场景翻译",
+        script_codes: ["12"],
+      },
     ],
     missing_info: ["本场没有分钟级数据，无法判断停留与转化效果"],
+  };
+
+  /**
+   * 编号对照表的最小样本：编号与原文都取自准则附录的真实数据。
+   * 界面用它把「心法3」「样板 04」展开成能读懂的话，因此断言也按真实文案写。
+   */
+  const GUIDELINE = {
+    mindsets: [
+      {
+        code: "心法3",
+        name: "每分钟放钩子",
+        check: "统计全场钩子密度，钩子类型是否不少于两种",
+        sample_codes: ["01", "11", "12"],
+      },
+    ],
+    samples: [
+      {
+        code: "04",
+        category: "逼单转化类",
+        usage: "需求逼单",
+        text: "你不要觉得你不需要猛士。等哪一天你下班路上下暴雨",
+      },
+    ],
+    violations: [{ term: "全网最低", replacement: "我们店里这价" }],
   };
 
   /** 已完成识别、尚未复盘的响应：复盘块显示入口按钮。 */
@@ -1339,6 +1469,98 @@ describe("复盘结论（V0.3）", () => {
     // 缺口单独成块，不藏在结论里
     expect(screen.getByText("本场不足以判断")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "下载 Markdown 报告" })).toBeInTheDocument();
+  });
+
+  it("复盘结论里引用的心法与样板编号可就地展开准则原文", async () => {
+    const done = {
+      status: "succeeded",
+      progress: 100,
+      clip_count: 1,
+      segment_count: 2,
+      batch_count: 4,
+      error: null,
+      started_at: "2026-01-01T00:30:00Z",
+      finished_at: "2026-01-01T00:32:00Z",
+      model_name: "test-model",
+      warnings: [],
+      result: REVIEW_RESULT,
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => {
+        if (url === "/api/tasks/t1") return jsonResponse(200, reviewedTask(done));
+        if (url === "/api/guideline") return jsonResponse(200, GUIDELINE);
+        return undefined;
+      },
+    ]);
+
+    await renderApp();
+    selectFile();
+
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "复盘分析" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // 编号标签本身来自结论，不等准则表就能出现；展开的原文才依赖 /api/guideline
+    expect(await screen.findByText("心法3")).toBeInTheDocument();
+    expect(screen.getByText("心法3").closest("details")).not.toBeNull();
+    // 编号是结论与准则之间的桥：只给编号不给原文，用户没法核对自己被要求改什么
+    expect(await screen.findByText(/每分钟放钩子/)).toBeInTheDocument();
+    // 话术样板同理，展开后能看到可直接照着说的原文
+    expect(screen.getByText("样板 04")).toBeInTheDocument();
+    expect(screen.getByText(/需求逼单/)).toBeInTheDocument();
+  });
+
+  it("复盘结论按六维逐项呈现：主题分布、重复度、违规表达与金句", async () => {
+    const done = {
+      status: "succeeded",
+      progress: 100,
+      clip_count: 1,
+      segment_count: 2,
+      batch_count: 4,
+      error: null,
+      started_at: "2026-01-01T00:30:00Z",
+      finished_at: "2026-01-01T00:32:00Z",
+      model_name: "test-model",
+      warnings: [],
+      result: REVIEW_RESULT,
+    };
+
+    mockApi([
+      healthRoute,
+      createRoute,
+      chunkRoute,
+      (url) => (url.endsWith("/complete") ? jsonResponse(200, { object_key: "k", size: 20 }) : undefined),
+      (url) => (url === "/api/tasks/t1" ? jsonResponse(200, reviewedTask(done)) : undefined),
+    ]);
+
+    await renderApp();
+    selectFile();
+
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "复盘分析" })).toHaveAttribute("aria-current", "page")
+    );
+
+    // 主题分布是「这场讲了什么」的分布口径，与一句话结论并列
+    expect(await screen.findByText(REVIEW_RESULT.topic_distribution)).toBeInTheDocument();
+    // 内容重复度：次数与有无信息增量分开标，同质重复才计入问题
+    expect(screen.getByText(/内容重复度/)).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.repetition[0].item)).toBeInTheDocument();
+    expect(screen.getByText("同质重复")).toBeInTheDocument();
+    // 违规表达给出可直接替换的说法，而不是只说「这句不能讲」
+    expect(screen.getByText(/违规表达与替换/)).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.violations[0].term)).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.violations[0].replacement)).toBeInTheDocument();
+    // 金句收录只在本场留痕，界面必须讲清不进话术库
+    expect(screen.getByText(/本场金句收录/)).toBeInTheDocument();
+    expect(screen.getByText(REVIEW_RESULT.quotes[0].text)).toBeInTheDocument();
+    expect(screen.getByText(/不写入跨场次话术库/)).toBeInTheDocument();
+    // 四轮专项分析各自的名字要能对上，用户才知道跑了哪几轮
+    expect(screen.getByText("内容结构 → 六维检核 → 问题归因与实验 → 金句采集")).toBeInTheDocument();
   });
 
   it("点击开始复盘会调用接口并把返回的状态写回界面", async () => {
@@ -1559,7 +1781,8 @@ describe("三子页信息架构（V0.4.1）", () => {
         one_line: "本场讲清了产品，但报价前的价值翻译不足。",
         analysis_level: "完整",
         level_reason: "全部片段识别成功",
-        batch_count: 1,
+        topic_distribution: "",
+        batch_count: 4,
         clip_count: 1,
         succeeded_clip_count: 1,
         failed_clip_count: 0,
@@ -1568,6 +1791,10 @@ describe("三子页信息架构（V0.4.1）", () => {
         top_issues: [],
         next_actions: [],
         missing_info: [],
+        quotes: [],
+        violations: [],
+        repetition: [],
+        passes_run: ["structure", "checks", "attribution", "quotes"],
       },
     },
   });
